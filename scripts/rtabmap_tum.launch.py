@@ -1,0 +1,40 @@
+"""Minimal headless RTAB-Map launch for the recorded RGB-D benchmark."""
+
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+
+def generate_launch_description() -> LaunchDescription:
+    return LaunchDescription([
+        Node(
+            package="rtabmap_slam",
+            executable="rtabmap",
+            name="rtabmap",
+            output="screen",
+            arguments=["--delete_db_on_start"],
+            parameters=[{
+                "subscribe_depth": True,
+                "subscribe_rgb": True,
+                "subscribe_stereo": False,
+                "subscribe_rgbd": False,
+                "frame_id": "camera_link",
+                "publish_tf": False,
+                "approx_sync": True,
+                "approx_sync_max_interval": 0.05,
+                "qos_image": 1,
+                "qos_camera_info": 1,
+                "qos_odom": 1,
+                "database_path": "/workspace/outputs/tum_fr1_rtabmap/rtabmap.db",
+                "Rtabmap/DetectionRate": "30.0",
+                "RGBD/LinearUpdate": "0.0",
+                "RGBD/AngularUpdate": "0.0",
+                "Mem/IncrementalMemory": "true",
+            }],
+            remappings=[
+                ("rgb/image", "/camera/rgb/image_rect_color"),
+                ("depth/image", "/camera/depth_registered/image_raw"),
+                ("rgb/camera_info", "/camera/rgb/camera_info"),
+                ("odom", "/odom"),
+            ],
+        ),
+    ])

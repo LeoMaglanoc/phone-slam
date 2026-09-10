@@ -1,0 +1,24 @@
+services:
+  slam:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: offline-slam:jazzy
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    environment:
+      PYTHONPATH: /workspace/src
+    stdin_open: true
+    tty: true
+
+  android:
+    build:
+      context: .
+      dockerfile: AndroidDockerfile
+    image: offline-slam:android
+    working_dir: /workspace/android
+    volumes:
+      - .:/workspace
+    stdin_open: true
+    tty: true

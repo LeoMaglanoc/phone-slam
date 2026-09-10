@@ -1,0 +1,5 @@
+dataset: phone
+pose_convention: T_world_camera
+depth_unit: millimeters
+confidence_min: 0
+
