@@ -22,8 +22,10 @@ def generate_launch_description() -> LaunchDescription:
                 "subscribe_rgbd": False,
                 "frame_id": "camera_link",
                 "publish_tf": False,
-                "approx_sync": True,
-                "approx_sync_max_interval": 0.05,
+                # Dataset-player emits a single, exact timestamp for RGB, depth,
+                # camera info and external odometry. Exact sync prevents a tuple
+                # from being paired with a neighbouring recorded frame.
+                "approx_sync": False,
                 "qos_image": 1,
                 "qos_camera_info": 1,
                 "qos_odom": 1,

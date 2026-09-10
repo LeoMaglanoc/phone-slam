@@ -51,7 +51,9 @@ if [[ "${ready}" != 1 ]]; then
   exit 1
 fi
 
-python3 -m slam_pipeline.ros.dataset_player "${dataset}" --config "${config}" --rate 1.0 --summary "${output}/replay_summary.json"
+# Half real-time playback gives RTAB-Map enough compute headroom while retaining
+# the source timestamps. It makes graph construction repeatable on a laptop.
+python3 -m slam_pipeline.ros.dataset_player "${dataset}" --config "${config}" --rate 0.5 --summary "${output}/replay_summary.json"
 python3 -m slam_pipeline.scripts.wait_rtabmap "${output}/rtabmap.db" --stable-polls 5 --poll-s 1 --timeout-s 120 --output "${output}/drain_summary.json"
 shutdown_rtabmap
 trap - EXIT

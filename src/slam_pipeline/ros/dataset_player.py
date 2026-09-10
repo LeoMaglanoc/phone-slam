@@ -53,7 +53,10 @@ class DatasetPlayer(Node):
         summary_path: Path | None = None,
     ) -> None:
         super().__init__("dataset_player")
-        qos = QoSProfile(depth=10)
+        # A replay can legitimately run faster than RTAB-Map's image callback.
+        # Keep a generous, reliable queue so each timestamped RGB-D tuple can be
+        # matched instead of silently losing old frames under brief load spikes.
+        qos = QoSProfile(depth=100)
         self._dataset = dataset
         self._rate = rate
         self._max_frames = max_frames
@@ -126,12 +129,16 @@ class DatasetPlayer(Node):
         transform.transform.translation.z = odom.pose.pose.position.z
         transform.transform.rotation = odom.pose.pose.orientation
 
-        # Odometry is sent first so RTAB-Map can associate it with the sensor frame.
+        # Camera info must already be available when the RGB-D synchronizer sees
+        # the images. All four messages retain this frame's exact timestamp.
+        self._camera_info_pub.publish(info_message)
+
+        # Odometry is sent before the sensor images so RTAB-Map can associate it
+        # with the RGB-D tuple.
         self._odom_pub.publish(odom)
         self._tf_broadcaster.sendTransform(transform)
         self._rgb_pub.publish(rgb_message)
         self._depth_pub.publish(depth_message)
-        self._camera_info_pub.publish(info_message)
         self._published_rgb_frames += 1
         self._published_depth_frames += 1
         self._published_odometry_poses += 1
