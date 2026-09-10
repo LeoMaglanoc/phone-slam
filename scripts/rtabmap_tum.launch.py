@@ -1,11 +1,14 @@
 """Minimal headless RTAB-Map launch for the recorded RGB-D benchmark."""
 
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
+        DeclareLaunchArgument("database_path", default_value="/workspace/outputs/rtabmap.db"),
         Node(
             package="rtabmap_slam",
             executable="rtabmap",
@@ -24,7 +27,7 @@ def generate_launch_description() -> LaunchDescription:
                 "qos_image": 1,
                 "qos_camera_info": 1,
                 "qos_odom": 1,
-                "database_path": "/workspace/outputs/tum_fr1_rtabmap/rtabmap.db",
+                "database_path": LaunchConfiguration("database_path"),
                 "Rtabmap/DetectionRate": "30.0",
                 "RGBD/LinearUpdate": "0.0",
                 "RGBD/AngularUpdate": "0.0",

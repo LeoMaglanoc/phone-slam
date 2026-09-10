@@ -1,282 +1,391 @@
-# Goal
+# Objective
 
-Build a complete offline 3D reconstruction pipeline that will eventually consume recordings from a Samsung Galaxy S24 FE.
+Take the existing `LeoMaglanoc/phone-slam` repository and bring it from a promising prototype to a **verified end-to-end offline RGB-D SLAM and 3D reconstruction system**.
 
-The intended final pipeline is:
+Do not redesign or rewrite the project unless necessary.
+
+Preserve the existing high-level architecture:
 
 ```text
-Galaxy S24 FE
-    │
-    ├── RGB
-    ├── ARCore Raw Depth
-    ├── Raw Depth confidence
-    ├── ARCore 6-DoF pose
-    ├── camera intrinsics
-    ├── timestamps
-    └── IMU
-            │
-            ▼
-       recorded dataset
-            │
-            ▼
-Laptop / offline
-    │
-    ├── RTAB-Map
-    │     ├── external ARCore odometry
-    │     ├── loop closure
-    │     └── pose-graph optimization
-    │
-    └── Open3D
-          ├── TSDF fusion
-          ├── point cloud
-          └── triangle mesh
+Data source
+   │
+   ├── TUM RGB-D benchmark
+   │
+   └── S24 FE / ARCore
+   │
+   ▼
+normalized dataset abstraction
+   │
+   ├── RGB
+   ├── depth
+   ├── poses
+   ├── timestamps
+   ├── intrinsics
+   ├── confidence (phone)
+   └── IMU (phone)
+   │
+   ▼
+RTAB-Map
+   │
+   ├── external odometry
+   ├── loop closures
+   └── graph optimization
+   │
+   ▼
+optimized camera poses
+   │
+   ▼
+Open3D TSDF
+   │
+   ├── point cloud
+   └── mesh
 ```
 
-Do **not** start with Android.
+The existing repository already has the correct broad decomposition: dataset adapters, a common `Frame`/`Dataset` schema, RTAB-Map replay, Open3D reconstruction, evaluation code, Docker, and an Android recorder.
 
-First prove that the offline pipeline works end-to-end using the TUM RGB-D SLAM benchmark.
-
-Do not report the task complete merely because the code compiles. Actually download the benchmark data, run the pipeline, inspect the outputs, and save evidence that it worked.
+The goal is now **correctness, reproducibility, and real evidence**.
 
 ---
 
-# 1. Technical choices
+# Non-negotiable definition of success
 
-Use:
+Do not claim the project works because:
+
+* Python tests pass.
+* Android builds.
+* `rtabmap.db` exists.
+* Open3D emits a `.ply`.
+
+The project is complete only when:
 
 ```text
-Ubuntu
-ROS 2 Jazzy
-RTAB-Map / rtabmap_ros
-Python 3
-Open3D
-NumPy
-OpenCV
+TUM fr1/xyz
+   ↓
+correct RGB-D replay
+   ↓
+RTAB-Map
+   ↓
+full global graph optimization
+   ↓
+optimized camera trajectory
+   ↓
+Open3D TSDF
+   ↓
+valid reconstruction + metrics + report
+
+AND
+
+TUM fr1/room
+   ↓
+same pipeline
+   ↓
+loop closure behavior inspected
+   ↓
+valid reconstruction + metrics + report
+
+AND
+
+S24 FE
+   ↓
+actual ARCore recording
+   ↓
+pulled to laptop
+   ↓
+same offline reconstruction abstraction
+   ↓
+valid point cloud / mesh
 ```
 
-Prefer binary RTAB-Map packages first:
-
-```bash
-sudo apt install ros-jazzy-rtabmap-ros
-```
-
-RTAB-Map currently provides ROS 2 Jazzy packages, and its ROS wrapper explicitly allows external odometry to replace `rtabmap_odom`.
-
-Use Docker only if native dependencies become problematic. Do not introduce Docker unnecessarily.
+All three stages must leave artifacts that can be inspected.
 
 ---
 
-# 2. Repository structure
+# P0 — Fix the two critical SLAM correctness errors
 
-Create approximately:
+## P0.1 Fix TUM depth units before RTAB-Map
 
-```text
-slam/
-├── README.md
-├── requirements.txt
-├── config/
-│   ├── tum_fr1_xyz.yaml
-│   ├── tum_fr1_room.yaml
-│   └── phone_default.yaml
-│
-├── scripts/
-│   ├── setup.sh
-│   ├── download_tum.sh
-│   ├── run_tum_xyz.sh
-│   ├── run_tum_room.sh
-│   └── reconstruct.sh
-│
-├── src/
-│   ├── dataset/
-│   │   ├── schema.py
-│   │   ├── tum_rgbd.py
-│   │   └── phone_dataset.py
-│   │
-│   ├── ros/
-│   │   ├── dataset_player.py
-│   │   └── trajectory_export.py
-│   │
-│   ├── reconstruction/
-│   │   ├── tsdf.py
-│   │   ├── pointcloud.py
-│   │   └── filters.py
-│   │
-│   └── evaluation/
-│       ├── trajectory.py
-│       └── validate_outputs.py
-│
-├── tests/
-│   ├── test_tum_loader.py
-│   ├── test_pose_conventions.py
-│   ├── test_depth_conversion.py
-│   └── test_tsdf_smoke.py
-│
-├── data/
-│   └── .gitkeep
-│
-└── outputs/
-    └── .gitkeep
-```
+Current problem:
 
-Do not commit benchmark datasets or large generated meshes to Git.
-
----
-
-# 3. Define one internal dataset format first
-
-Everything downstream must use one sensor-recording abstraction independent of TUM or Android.
-
-Represent a frame as conceptually:
+`dataset_player.py` reads a TUM depth PNG and publishes the raw array as:
 
 ```python
-Frame:
-    timestamp_ns
-    rgb_path
-    depth_path
-    confidence_path | None
-    T_world_camera
-    intrinsics
+encoding="16UC1"
 ```
 
-A complete dataset also contains:
+without unit conversion.
+
+That is incorrect for RTAB-Map.
+
+The TUM benchmark stores depth PNGs with:
 
 ```text
-camera intrinsics
-camera image dimensions
-depth scale
-ordered RGB/depth observations
-timestamp associations
-optional IMU measurements
-optional confidence maps
+5000 = 1 metre
+10000 = 2 metres
 ```
 
-Use transformation notation consistently:
+and zero means invalid depth.
+
+RTAB-Map interprets:
 
 ```text
-T_world_camera
+CV_16UC1 = depth in millimetres
+CV_32FC1 = depth in metres
 ```
 
-meaning a point in camera coordinates transforms into world coordinates as
+according to its current `SensorData` implementation.
+
+### Preferred fix
+
+For TUM ROS replay, publish depth as `32FC1` metres:
+
+```python
+depth_m = depth_raw.astype(np.float32) / 5000.0
+depth_m[depth_raw == 0] = 0.0
+```
+
+and:
+
+```python
+depth_message = bridge.cv2_to_imgmsg(
+    depth_m,
+    encoding="32FC1",
+)
+```
+
+This avoids unnecessary quantization and makes the unit semantics explicit.
+
+Alternatively, converting to millimetres and publishing `16UC1` is acceptable:
+
+```python
+depth_mm = np.round(depth_raw.astype(np.float32) / 5.0).astype(np.uint16)
+```
+
+but choose exactly one representation and document it.
+
+### Add tests
+
+Test:
 
 ```text
-p_world = T_world_camera @ p_camera
+TUM raw 0      -> invalid
+TUM raw 5000   -> 1.0 m
+TUM raw 10000  -> 2.0 m
 ```
 
-Document this convention prominently.
+Also test the exact ROS payload conversion, not only the Open3D conversion.
 
-Never silently invert poses.
+The Open3D path currently handles `depth_scale=5000` correctly; do not accidentally break that path while fixing ROS replay.
 
 ---
 
-# 4. Benchmark Gate A — TUM freiburg1_xyz
+## P0.2 Stop treating `Node.pose` as the optimized RTAB-Map trajectory
 
-Download the official:
-
-```text
-rgbd_dataset_freiburg1_xyz
-```
-
-sequence from the TUM RGB-D SLAM benchmark.
-
-TUM specifically recommends the `xyz` sequences for first experiments because the motion is simple and suitable for debugging.
-
-The dataset contains timestamped:
+Current code in:
 
 ```text
-RGB PNGs
-depth PNGs
-RGB timestamps
-depth timestamps
-ground-truth trajectory
+src/slam_pipeline/ros/trajectory_export.py
 ```
 
-TUM depth PNG values use:
+does:
 
-```text
-depth_meters = uint16_value / 5000
+```sql
+SELECT stamp, pose
+FROM Node
+WHERE pose IS NOT NULL
 ```
 
-and zero indicates invalid depth. RGB and depth are already registered pixel-to-pixel.
+and treats those poses as optimized camera poses.
 
-Ground-truth format is:
+Do not do this.
 
-```text
-timestamp tx ty tz qx qy qz qw
-```
-
-and describes the color camera pose with respect to a fixed world frame.
-
-Implement a proper timestamp association instead of pairing files by array index.
-
----
-
-# 5. First sanity reconstruction: ground truth → Open3D
-
-Before RTAB-Map, prove basic geometry.
+RTAB-Map provides an official exporter for optimized poses.
 
 Use:
 
-```text
-TUM RGB
-+
-TUM depth
-+
-TUM ground-truth poses
-+
-camera intrinsics
-        ↓
-Open3D TSDF
-        ↓
-mesh + point cloud
+```bash
+rtabmap-export \
+    --poses \
+    --poses_format 11 \
+    --opt 0 \
+    rtabmap.db
 ```
 
-Use `ScalableTSDFVolume` or the current equivalent suitable for scene-scale reconstruction.
+RTAB-Map's maintainer documents:
 
-Open3D's documented TSDF workflow integrates RGB-D images using known camera poses and then extracts a triangle mesh or point cloud.
+* `--poses` = optimized robot-frame poses.
+* pose format `11` = timestamp + pose + node ID.
+* `--opt 0` = full global graph optimization.
+* `--opt 3` = raw odometry without optimization.
 
-Use the TUM-recommended default registered RGB-D calibration initially:
-
-```text
-fx = 525
-fy = 525
-cx = 319.5
-cy = 239.5
-```
-
-because TUM warns that undistorting the already registered depth maps is non-trivial and recommends the default parameter set for this data.
-
-Produce:
+The current RTAB-Map launch sets:
 
 ```text
-outputs/tum_xyz/gt_tsdf_mesh.ply
-outputs/tum_xyz/gt_pointcloud.ply
-outputs/tum_xyz/gt_trajectory.png
-outputs/tum_xyz/gt_mesh_preview.png
+frame_id = camera_link
 ```
 
-This stage must run before RTAB-Map integration.
+and publishes external odometry with `camera_link` as its child frame, so the RTAB-Map robot frame and camera frame are intentionally coincident in this pipeline.
 
-Acceptance criteria:
+### Implementation
+
+Replace the current SQLite pose interpretation with a module that invokes the RTAB-Map exporter and parses its output.
+
+Suggested API:
+
+```python
+export_rtabmap_trajectory(
+    database: Path,
+    output: Path,
+    optimization="full",
+) -> Trajectory
+```
+
+Support at least:
 
 ```text
-mesh file exists
-mesh has > 0 vertices
-mesh has > 0 triangles
-point cloud has > 0 points
-bounding box dimensions are finite and plausible
-no NaNs/Infs in geometry
-a preview image is rendered successfully
+full optimized: --opt 0
+raw odometry:   --opt 3
 ```
 
-Print all counts and bounding-box dimensions to the terminal.
+Save both during benchmark testing:
+
+```text
+raw_odom_trajectory.txt
+optimized_trajectory.txt
+```
+
+The parser must handle RTAB-Map pose format 11, including the trailing node ID.
+
+Do not depend on undocumented binary SQLite blob layout for optimized poses.
+
+### Verification
+
+For every benchmark produce:
+
+```text
+input odometry trajectory
+RTAB-Map raw odometry export
+RTAB-Map optimized export
+ground truth
+```
+
+Plot all relevant trajectories.
 
 ---
 
-# 6. Build a ROS 2 offline dataset player
+# P1 — Fix TUM timestamp association
 
-Create a ROS 2 node that publishes the normalized dataset as if it were a live RGB-D camera plus external odometry.
+The current `_associate()` docstring says:
 
-Publish:
+```text
+nearest unused second record
+```
+
+but the implementation does not actually mark a matched target sample as used.
+
+It can therefore reuse one depth or pose sample for multiple RGB observations.
+
+Replace it with a proper one-to-one nearest-neighbour timestamp associator.
+
+Requirements:
+
+```text
+- input arrays sorted by timestamp
+- each sample used at most once
+- configurable maximum time difference
+- deterministic ties
+- O(N) or O(N log N)
+```
+
+Add tests covering:
+
+```text
+one RGB / one depth
+
+two RGB frames competing for one depth frame
+
+missing depth sample
+
+irregular timestamps
+
+timestamps outside threshold
+
+exact timestamp matches
+```
+
+Also expose/report association statistics:
+
+```text
+RGB observations
+depth observations
+pose observations
+associated RGB-D pairs
+associated RGB-D-pose triples
+dropped RGB frames
+maximum timestamp residual
+mean timestamp residual
+```
+
+---
+
+# P2 — Turn `fr1/xyz` into a real end-to-end integration gate
+
+TUM recommends `fr1/xyz` for initial debugging because the motion is simple and mostly translational.
+
+The existing:
+
+```bash
+./scripts/run_tum_xyz.sh
+```
+
+currently only executes:
+
+```text
+TUM ground truth poses
+    ↓
+Open3D TSDF
+```
+
+and does not run the full RTAB-Map pipeline.
+
+Change it so one command performs the whole gate.
+
+Required command:
+
+```bash
+./scripts/run_tum_xyz.sh
+```
+
+Required sequence:
+
+```text
+1. download official fr1/xyz if missing
+2. validate archive/dataset
+3. load dataset
+4. associate RGB/depth/GT timestamps
+5. ground-truth TSDF sanity reconstruction
+6. launch RTAB-Map headlessly
+7. replay correct RGB-D + GT external odometry
+8. terminate RTAB-Map cleanly
+9. verify DB integrity
+10. export raw odometry trajectory
+11. export fully optimized trajectory
+12. calculate ATE/RPE
+13. reconstruct TSDF using optimized poses
+14. validate mesh/cloud
+15. generate plots
+16. generate report.md
+17. exit non-zero on any failed required stage
+```
+
+Do not require RViz or GUI interaction.
+
+---
+
+# P3 — Make RTAB-Map replay deterministic and observable
+
+Keep the dataset player architecture, but improve it.
+
+Current input topology is:
 
 ```text
 /rgb/image
@@ -286,724 +395,1276 @@ Publish:
 /tf
 ```
 
-Use dataset timestamps, not wall-clock timestamps.
+with RTAB-Map subscribing to external odometry.
 
-Set ROS simulated time appropriately if useful.
+Preserve this.
 
-For benchmark V1, use TUM ground truth as `/odom`.
+## Requirements
 
-This intentionally simulates the future phone architecture:
-
-```text
-TUM ground truth pose ≈ future ARCore pose
-TUM RGB              ≈ future ARCore camera frame
-TUM depth            ≈ future ARCore Raw Depth
-```
-
-RTAB-Map accepts external odometry rather than requiring its own RGB-D odometry node.
-
-Do not run `rgbd_odometry` for this test.
-
----
-
-# 7. RTAB-Map benchmark pipeline
-
-Feed:
+Record:
 
 ```text
-RGB
-depth
-camera info
-external /odom
-```
-
-into `rtabmap_slam`.
-
-Pipeline:
-
-```text
-TUM dataset player
-       │
-       ├── RGB ──────────┐
-       ├── depth ────────┤
-       ├── camera_info ──┼── RTAB-Map
-       └── GT odometry ──┘
-                              │
-                              ├── map database
-                              ├── keyframes
-                              ├── graph constraints
-                              └── optimized poses
-```
-
-Disable RTAB-Map's visual odometry because external odometry is being supplied.
-
-Make synchronization deterministic for offline replay.
-
-Do not skip frames because the system is slower than playback. RTAB-Map's launch configuration explicitly exposes an option intended for dataset/offline processing so all frames can be processed instead of dropping frames to reduce latency.
-
-Save:
-
-```text
-outputs/tum_xyz/rtabmap.db
-outputs/tum_xyz/optimized_trajectory.txt
-outputs/tum_xyz/rtabmap_stats.json
-```
-
-The stats file should include at least:
-
-```text
-number of processed RGB-D frames
-number of graph nodes
-number of constraints
-number of loop closures if available
-processing failures
+published RGB frames
+published depth frames
+published odometry poses
+RTAB-Map processed graph nodes
+dropped/rejected frames
+start timestamp
+end timestamp
 runtime
 ```
 
----
+Do not simply:
 
-# 8. Export RTAB-Map's optimized trajectory
-
-Export the final camera poses after RTAB-Map graph optimization.
-
-Convert them into the TUM trajectory format:
-
-```text
-timestamp tx ty tz qx qy qz qw
+```bash
+sleep 3
+kill RTAB-Map
 ```
 
-Save:
+and assume the database has flushed.
+
+The current script does essentially this.
+
+Implement deterministic completion.
+
+Possible strategies:
 
 ```text
-outputs/tum_xyz/optimized_trajectory.txt
+- observe node count until expected processing completes
+- wait for RTAB-Map statistics indicating final frame
+- explicitly issue ROS shutdown after player completion and processing drain
 ```
 
-Plot three trajectories if available:
-
-```text
-TUM ground truth
-input odometry
-RTAB-Map optimized trajectory
-```
-
-For the first benchmark these may overlap closely because ground truth itself is being used as the odometry source.
-
-That is expected.
-
-The purpose of this test is initially **interface and reconstruction validation**, not demonstrating that RTAB-Map can improve motion-capture poses.
+Whichever method is used, document it and verify that repeated runs produce consistent node counts.
 
 ---
 
-# 9. Final dense reconstruction from optimized poses
+# P4 — Add database/graph inspection
 
-Now run:
+For each RTAB-Map run, inspect the graph rather than only checking that the SQLite file is non-empty.
+
+RTAB-Map's schema stores graph constraints in the `Link` table, where link type `1` is `kGlobalClosure`.
+
+Create:
 
 ```text
-RGB-D frames
-+
-RTAB-Map optimized poses
-        ↓
-Open3D TSDF
-        ↓
-final point cloud + mesh
+src/slam_pipeline/rtabmap/database.py
 ```
+
+with read-only diagnostic utilities.
+
+Extract at least:
+
+```text
+node_count
+link_count
+neighbor_link_count
+global_loop_closure_count
+local_space_closure_count
+local_time_closure_count
+database_size_bytes
+first_node_stamp
+last_node_stamp
+```
+
+It is acceptable to read the database directly for **diagnostics**.
+
+Do not use raw `Node.pose` as the optimized trajectory.
+
+Use the official `rtabmap-export` path for optimization.
+
+---
+
+# P5 — Reconstruct using genuinely optimized RTAB-Map poses
+
+Current `reconstruct_rtabmap.py` already has a sensible architecture:
+
+```text
+load source dataset
+load RTAB-Map poses
+associate pose timestamp -> source frame
+replace Frame.T_world_camera
+run Open3D TSDF
+```
+
+Preserve that.
+
+Only replace the trajectory source with the corrected optimized trajectory export.
+
+Add one-to-one timestamp association here too.
+
+Report:
+
+```text
+number of optimized RTAB-Map poses
+number matched to RGB-D frames
+number unmatched
+maximum timestamp difference
+mean timestamp difference
+```
+
+Fail if too few poses can be associated.
+
+---
+
+# P6 — Strengthen trajectory evaluation
+
+Keep the current evaluation module but verify it numerically.
+
+It currently implements:
+
+```text
+ATE
+RPE translation
+RPE rotation
+rigid trajectory alignment
+```
+
+TUM recommends absolute trajectory error for SLAM evaluation and relative pose error for odometry-style evaluation.
+
+Cross-check the project's implementation against either:
+
+```text
+TUM reference evaluation scripts
+```
+
+or:
+
+```text
+evo_ape
+evo_rpe
+```
+
+for at least `fr1/xyz`.
+
+The numbers should agree within numerical tolerance.
+
+Do not silently include scale alignment because this pipeline is metric.
+
+Use rigid SE(3) alignment only unless explicitly evaluating a monocular scale-ambiguous estimator in the future.
 
 Generate:
 
 ```text
-outputs/tum_xyz/final_mesh.ply
-outputs/tum_xyz/final_cloud.ply
-outputs/tum_xyz/final_mesh_preview.png
+trajectory_metrics.json
+trajectory_comparison.png
+ate_error.png
 ```
 
-Open3D expects RGB and depth corresponding to the same camera geometry for its RGB-D reconstruction pipeline, which TUM provides by pre-registering its depth maps to RGB.
-
-Make these configurable:
-
-```text
-voxel size
-SDF truncation
-minimum depth
-maximum depth
-frame stride
-```
-
-Do not aggressively tune them to one benchmark.
-
----
-
-# 10. Quantitative trajectory evaluation
-
-Use TUM's trajectory evaluation tools or an equivalent implementation.
-
-Compute at least:
+Include:
 
 ```text
 ATE RMSE
 ATE mean
 ATE median
-RPE translation
-RPE rotation
-```
-
-TUM's benchmark explicitly supports absolute trajectory error for SLAM evaluation and relative pose error for odometry evaluation.
-
-Save:
-
-```text
-outputs/tum_xyz/evaluation.json
-outputs/tum_xyz/ate_plot.png
-outputs/tum_xyz/trajectory_comparison.png
-```
-
-Do not invent a success threshold purely to make the test pass.
-
-Instead report the measured result and confirm that:
-
-```text
-trajectory is finite
-coordinate convention is correct
-scale is correct
-trajectory aligns visually with ground truth
-there are no catastrophic jumps or axis inversions
+ATE max
+RPE translation RMSE
+RPE rotation RMSE
+associated poses
 ```
 
 ---
 
-# 11. Benchmark Gate B — freiburg1_room
+# P7 — Add the stronger `fr1/room` SLAM gate
 
-After `freiburg1_xyz` works, automatically download and run:
-
-```text
-rgbd_dataset_freiburg1_room
-```
-
-This is the stronger integration test.
-
-TUM describes this sequence as traversing an entire office and closing a loop, specifically making it useful for testing loop-closure behavior.
-
-Repeat:
-
-```text
-dataset parsing
-    ↓
-ground-truth TSDF sanity reconstruction
-    ↓
-RTAB-Map with external odometry
-    ↓
-optimized poses
-    ↓
-Open3D TSDF
-    ↓
-mesh
-    ↓
-trajectory evaluation
-```
-
-Save all results under:
-
-```text
-outputs/tum_room/
-```
-
-Inspect RTAB-Map's statistics and report whether visual loop closures were detected.
-
-Do not fake or require a loop-closure count if RTAB-Map genuinely does not detect one with the chosen configuration. Report the actual result and investigate if zero.
-
----
-
-# 12. Automated end-to-end command
-
-I want this eventually reduced to:
-
-```bash
-./scripts/run_tum_xyz.sh
-```
-
-and:
+The current:
 
 ```bash
 ./scripts/run_tum_room.sh
 ```
 
-Each command should:
+only performs ground-truth Open3D reconstruction.
 
-```text
-download dataset if missing
-verify data
-associate timestamps
-launch/replay RTAB-Map
-wait for processing to finish
-export optimized poses
-run TSDF integration
-run evaluation
-render previews
-validate outputs
-exit 0 only if the pipeline completed successfully
+Change it to run exactly the same end-to-end RTAB-Map pipeline as `fr1/xyz`.
+
+TUM describes `fr1/room` as a trajectory around an office that closes the loop and is specifically useful for evaluating loop-closure behavior.
+
+Required:
+
+```bash
+./scripts/run_tum_room.sh
 ```
 
-No manual RViz interaction may be required for the automated test.
+must perform:
 
-RViz may be supported as an optional debugging mode.
+```text
+download
+association
+GT TSDF baseline
+RTAB-Map
+graph inspection
+full global optimization
+trajectory evaluation
+optimized TSDF
+report
+```
+
+Report the actual number of:
+
+```text
+global loop closures
+local loop closures
+graph nodes
+graph constraints
+```
+
+Do **not** force a hard-coded positive loop-closure count merely to pass.
+
+If zero global loop closures are detected:
+
+```text
+1. verify image stream and descriptors are being stored
+2. verify RTAB-Map parameters
+3. inspect RTAB-Map log
+4. inspect graph
+5. determine whether the run is valid but no closure was accepted
+```
+
+Report the result accurately.
+
+Do not fake a loop closure or tune parameters purely to manufacture one.
 
 ---
 
-# 13. Produce an HTML or Markdown run report
+# P8 — Generate benchmark evidence
 
-For each benchmark automatically generate:
+Create:
 
 ```text
 outputs/tum_xyz/report.md
 outputs/tum_room/report.md
 ```
 
-Include:
+The reports must contain:
 
 ```text
-dataset used
-number of RGB frames
-number of depth frames
-number of associated frames
-number of RTAB-Map graph nodes
-number of loop closures
-trajectory metrics
-mesh vertex count
-mesh triangle count
+git commit SHA
+date
+Docker image / dependency versions
+RTAB-Map version
+ROS version
+Open3D version
+
+dataset
+source URL
+frame counts
+association statistics
+
+RTAB-Map nodes
+RTAB-Map links
+global loop closures
+local loop closures
+
+raw odom metrics
+optimized trajectory metrics
+
+TSDF integrated frames
+mesh vertices
+mesh triangles
 point count
-scene bounding box
+bounding-box dimensions
+
 runtime
-commands executed
-warnings/errors
+warnings
+errors
 ```
 
-Embed or reference:
+Also generate:
 
 ```text
+rgb_example.png
+depth_example.png
+trajectory_comparison.png
+gt_mesh_preview.png
+optimized_mesh_preview.png
+```
+
+Keep large:
+
+```text
+datasets
+rtabmap.db
+PLY files
+```
+
+out of Git.
+
+Commit small reproducibility evidence under something like:
+
+```text
+docs/results/tum_xyz/
+docs/results/tum_room/
+```
+
+containing:
+
+```text
+report.md
+metrics JSON
 trajectory plot
-RGB example
-depth example
 mesh preview
 ```
 
-The report must make it possible to inspect whether the run really worked without reading terminal logs.
+This makes the GitHub repo visibly demonstrate that the benchmark was actually run.
 
 ---
 
-# 14. Only after benchmark success: define the S24 FE format
+# P9 — Add an end-to-end automated validation script
 
-Create the phone recording format:
+Create:
 
-```text
-scan/
-├── metadata.json
-├── rgb/
-│   ├── 000000.jpg
-│   └── ...
-├── depth/
-│   ├── 000000.png
-│   └── ...
-├── confidence/
-│   ├── 000000.png
-│   └── ...
-├── poses.csv
-├── imu.csv
-└── frames.csv
+```bash
+./scripts/test_benchmarks.sh
 ```
 
-`metadata.json`:
+It should run:
 
-```json
-{
-  "rgb_width": 0,
-  "rgb_height": 0,
-  "depth_width": 0,
-  "depth_height": 0,
-  "fx": 0,
-  "fy": 0,
-  "cx": 0,
-  "cy": 0,
-  "depth_unit": "millimeters",
-  "pose_convention": "T_world_camera"
+```bash
+./scripts/run_tum_xyz.sh
+./scripts/run_tum_room.sh
+```
+
+and validate output artifacts.
+
+Fail if:
+
+```text
+rtabmap.db missing or empty
+optimized trajectory missing
+optimized trajectory has no poses
+mesh has zero vertices
+mesh has zero triangles
+point cloud has zero points
+NaN/Inf geometry detected
+trajectory evaluation failed
+report missing
+```
+
+Do not invent overly aggressive numerical SLAM thresholds just to label runs pass/fail.
+
+Instead, fail on clear correctness problems such as:
+
+```text
+wrong scale
+axis inversion
+huge discontinuities
+empty graph
+empty reconstruction
+timestamp association failure
+```
+
+Record actual accuracy metrics in the report.
+
+---
+
+# P10 — Expand unit/integration tests
+
+Keep the existing tests; they are a good starting point.
+
+Add tests for:
+
+## Dataset
+
+```text
+unique timestamp association
+TUM depth units
+phone depth units
+missing frames
+invalid paths
+invalid pose matrix
+```
+
+## Geometry
+
+```text
+T_world_camera convention
+inverse transforms
+quaternion round-trip
+projection / unprojection
+synthetic plane reconstruction
+synthetic cube reconstruction
+```
+
+## RTAB-Map
+
+```text
+pose format 11 parser
+raw vs optimized exporter invocation
+SQLite graph statistics
+node/link counting
+global closure type parsing
+```
+
+## Full integration
+
+Add a small smoke test that processes a limited frame slice.
+
+Full TUM benchmark runs may remain outside normal CI due to download/runtime cost.
+
+---
+
+# P11 — Fix the Android Raw Depth recorder
+
+Only address Android after both benchmark gates work.
+
+The current recorder already obtains:
+
+```text
+CPU RGB
+ARCore pose
+Raw Depth 16-bit
+Raw Depth confidence
+camera intrinsics
+```
+
+and writes a custom dataset.
+
+Keep that general approach.
+
+However, make the following corrections.
+
+---
+
+## P11.1 Correct Raw Depth “new frame” detection
+
+Current code uses:
+
+```kotlin
+if (frame.timestamp != depth.timestamp) return
+```
+
+Replace this.
+
+ARCore documents that Raw Depth is normally updated at a lower rate than camera frames, with intermediate outputs being 3D reprojections of earlier depth data. Google explicitly recommends comparing the current depth-image timestamp with the **previous depth-image timestamp** to detect newly computed depth.
+
+Use:
+
+```kotlin
+if (depth.timestamp == lastDepthTimestamp) {
+    // Reprojected/reused depth.
+    return
+}
+
+lastDepthTimestamp = depth.timestamp
+```
+
+Optionally allow a configuration:
+
+```text
+record_new_depth_only = true/false
+```
+
+Default to `true` for this offline reconstruction dataset.
+
+Store both:
+
+```text
+rgb_timestamp_ns
+depth_timestamp_ns
+```
+
+---
+
+## P11.2 Store per-frame intrinsics
+
+The current recorder writes camera intrinsics once into the manifest.
+
+ARCore documents that image intrinsics may change per frame.
+
+Store per-frame:
+
+```text
+rgb_fx
+rgb_fy
+rgb_cx
+rgb_cy
+rgb_width
+rgb_height
+```
+
+and depth-specific calibration information described below.
+
+The manifest may still contain nominal/default intrinsics for convenience.
+
+---
+
+# P12 — Fix ARCore RGB/depth geometric alignment
+
+This is important.
+
+Current Open3D loading code does:
+
+```python
+if depth.shape != color.shape:
+    depth = cv2.resize(
+        depth,
+        color.shape,
+        interpolation=cv2.INTER_NEAREST,
+    )
+```
+
+Do not treat this as generally correct for ARCore.
+
+Google documents that the CPU camera image and ARCore depth image can have different aspect ratios; in that case, the depth image is effectively a crop of the camera image, and coordinate conversion should be done through ARCore's image/texture coordinate transforms.
+
+Google's own Raw Depth codelab obtains **texture intrinsics** and scales those intrinsics to the actual depth resolution before unprojecting Raw Depth pixels.
+
+### Required implementation
+
+Record enough information to reconstruct correct correspondences offline.
+
+At minimum store, for each recorded frame:
+
+```text
+RGB image intrinsics
+texture/depth-relevant intrinsics
+RGB dimensions
+depth dimensions
+mapping needed between depth normalized coordinates and CPU RGB coordinates
+```
+
+Preferred approach:
+
+On Android, generate and store a compact coordinate mapping/calibration description using:
+
+```kotlin
+Frame.transformCoordinates2d(
+    Coordinates2d.TEXTURE_NORMALIZED,
+    ...,
+    Coordinates2d.IMAGE_PIXELS,
+    ...
+)
+```
+
+or the inverse mapping.
+
+Do not just resize depth to RGB resolution unless it has been mathematically demonstrated that the recorded camera configuration makes that equivalent.
+
+### Depth intrinsics
+
+Follow Google's Raw Depth geometry:
+
+```text
+fx_depth = fx_texture * depth_width / texture_intrinsic_width
+fy_depth = fy_texture * depth_height / texture_intrinsic_height
+cx_depth = cx_texture * depth_width / texture_intrinsic_width
+cy_depth = cy_texture * depth_height / texture_intrinsic_height
+```
+
+as illustrated by Google's Raw Depth codelab.
+
+Store these values explicitly per depth frame.
+
+---
+
+# P13 — Keep Raw Depth native and confidence-aware
+
+ARCore Raw Depth:
+
+* is sparse;
+* uses zero for invalid depth;
+* is represented in millimetres;
+* provides a matching confidence image.
+
+Preserve the raw files.
+
+Never destructively alter the stored depth.
+
+Do confidence filtering offline.
+
+Support:
+
+```bash
+--confidence-min 0
+--confidence-min 64
+--confidence-min 128
+--confidence-min 192
+```
+
+or arbitrary `0..255`.
+
+This enables later reconstruction experiments without rescanning.
+
+---
+
+# P14 — Move Android disk work off the GL thread
+
+Current `record(frame)` performs:
+
+```text
+camera acquisition
+YUV conversion
+JPEG encoding
+depth copying
+confidence copying
+CSV writing
+flushing
+```
+
+inside the AR rendering/update path.
+
+Refactor to:
+
+```text
+AR thread
+   │
+   ├── acquire/copy required frame data
+   │
+   ▼
+bounded queue
+   │
+   ▼
+background writer thread
+   │
+   ├── encode JPEG
+   ├── write depth
+   ├── write confidence
+   └── append metadata
+```
+
+Important:
+
+`android.media.Image` objects should not simply be passed to a background thread and held indefinitely.
+
+Copy the required buffers/metadata promptly, close ARCore Images, then enqueue owned byte arrays / immutable frame packets.
+
+Use a bounded queue.
+
+If writer throughput cannot keep up:
+
+```text
+count dropped frames
+log the event
+report it in recording metadata
+```
+
+Do not allow unbounded memory growth.
+
+---
+
+# P15 — Stop swallowing Android errors
+
+Current code has:
+
+```kotlin
+catch (_: Exception) {
 }
 ```
 
-`frames.csv` should associate:
+around acquisition/recording.
+
+Replace broad silent swallowing with specific handling.
+
+Expected conditions such as ARCore depth not yet being available may be handled quietly or counted.
+
+Unexpected exceptions must:
+
+```text
+Log.e(...)
+increment error counter
+appear in session summary
+```
+
+At recording end, show:
+
+```text
+RGB frames attempted
+new Raw Depth frames recorded
+reprojected depth frames skipped
+RGB acquisition misses
+depth acquisition misses
+writer queue drops
+unexpected errors
+```
+
+---
+
+# P16 — Record phone IMU
+
+The current Android implementation does not yet record IMU data.
+
+Add Android `SensorManager` logging for:
+
+```text
+gyroscope
+accelerometer
+```
+
+Write:
+
+```text
+imu.csv
+```
+
+with:
+
+```text
+timestamp_ns,
+gx,gy,gz,
+ax,ay,az
+```
+
+Record the exact Android sensor timestamp.
+
+IMU is **not used by V1 RTAB-Map reconstruction** because ARCore already provides the pose.
+
+Store it now for future:
+
+```text
+ORB-SLAM3
+OpenVINS
+stereo-inertial
+ARCore-vs-custom-VIO comparisons
+```
+
+Do not delay V1 mapping because of IMU processing.
+
+---
+
+# P17 — Improve the phone dataset format
+
+Move from relying on identical pose/frame timestamps toward an explicitly associated format.
+
+Current loader performs exact dictionary lookup:
+
+```python
+pose_row = poses.get(timestamp_ns)
+```
+
+That works with the current synchronous recorder but is brittle.
+
+Use `frames.csv` with explicit timestamps:
 
 ```text
 frame_id
 rgb_timestamp_ns
-rgb_path
 depth_timestamp_ns
+pose_timestamp_ns
+
+rgb_path
 depth_path
 confidence_path
-pose_timestamp_ns
-```
 
-`poses.csv`:
+rgb_fx
+rgb_fy
+rgb_cx
+rgb_cy
 
-```text
-timestamp_ns,tx,ty,tz,qx,qy,qz,qw
-```
+depth_fx
+depth_fy
+depth_cx
+depth_cy
 
-`imu.csv`:
+rgb_width
+rgb_height
+depth_width
+depth_height
 
-```text
-timestamp_ns,gx,gy,gz,ax,ay,az
-```
-
-IMU should be recorded now even though the V1 offline mapper does not consume it. This preserves the option to compare ARCore odometry with our own VIO later.
-
----
-
-# 15. Important ARCore Raw Depth handling
-
-The eventual Android recorder must save:
-
-```text
-RGB
-ARCore camera pose
-Raw Depth
-Raw Depth confidence
-depth timestamp
-RGB/camera timestamp
-camera intrinsics
-IMU
-```
-
-Do not assume every rendered ARCore frame contains a newly computed Raw Depth map.
-
-ARCore documents that Raw Depth is typically updated at a lower frequency and intermediate depth images can be reprojections of older data; compare the depth image timestamp to determine whether it contains a new measurement.
-
-Therefore save the actual:
-
-```text
-depth_timestamp_ns
-```
-
-and add:
-
-```text
 is_new_depth
+tracking_state
 ```
 
-to `frames.csv`.
-
-ARCore Raw Depth is sparse; invalid pixels have zero depth and zero confidence. The matching confidence image ranges from 0 to 255.
-
-Do not fill missing depth with arbitrary interpolation in V1.
-
-Treat zero as invalid.
-
-Expose configurable confidence filtering, initially:
+Keep poses in:
 
 ```text
-minimum confidence
+poses.csv
 ```
 
-rather than hard-coding one threshold.
+and associate by timestamp with configurable tolerance.
+
+Do not assume asynchronous streams always share exact integer timestamps.
 
 ---
 
-# 16. ARCore depth intrinsics/alignment
+# P18 — Make `phone_default.yaml` real
 
-Do not assume the depth image has the same resolution as the RGB image.
-
-ARCore depth resolution is device-dependent and can differ from the camera image. Google's example scales camera texture intrinsics to the depth-image dimensions before unprojection.
-
-Implement the phone loader such that it can either:
+Current:
 
 ```text
-A. convert Raw Depth into RGB camera geometry
-
-or
-
-B. preserve depth-camera geometry with the appropriate intrinsics
+reconstruct_phone.py --config ...
 ```
 
-Choose one convention and document it.
+accepts a config path but does not actually load it; TSDF parameters are hard-coded.
 
-The downstream mapper must not silently pretend mismatched RGB/depth coordinates are registered.
+Fix this.
+
+Move into `phone_default.yaml`:
+
+```text
+depth truncation
+confidence minimum
+TSDF voxel size
+TSDF truncation
+frame stride
+timestamp tolerances
+depth registration strategy
+```
+
+The Python script must load and obey those values.
+
+Print the final effective configuration in the reconstruction report.
 
 ---
 
-# 17. Phone pipeline after the benchmark
+# P19 — Build and install the actual Android app
 
-Only after the TUM tests pass, implement:
+After benchmark validation:
 
-```text
-Android recorder
-        ↓
-copy scan folder to laptop
-        ↓
-python phone_dataset.py
-        ↓
-same normalized Frame abstraction used for TUM
-        ↓
-same RTAB-Map pipeline
-        ↓
-same Open3D TSDF pipeline
+```bash
+./scripts/build_android.sh
+./scripts/install_android.sh
 ```
 
-There should be no phone-specific logic in RTAB-Map or TSDF code.
+The current Dockerized Android build infrastructure may be retained.
 
-Only the dataset adapter should differ:
+On the connected S24 FE:
 
 ```text
-TUM adapter ────┐
-                ▼
-           common dataset
-                ▲
-Phone adapter ──┘
+1. install debug APK
+2. grant camera permission
+3. start app
+4. verify RAW_DEPTH_ONLY reports supported
+5. record a short 10–20 second scene
+6. move the phone deliberately to generate parallax
+7. stop recording
+8. inspect logcat
+9. pull recording
+10. inspect dataset structure
+```
+
+Do not yet attempt an entire apartment scan.
+
+Start with something geometrically easy:
+
+```text
+desk
+chair
+wall corner
+box
+```
+
+with textured surfaces and camera movement.
+
+---
+
+# P20 — Reconstruct first real S24 FE scan
+
+Run:
+
+```bash
+./scripts/pull_phone_recordings.sh
+```
+
+then:
+
+```bash
+docker compose run --rm slam \
+python3 -m slam_pipeline.scripts.reconstruct_phone \
+    data/phone_recordings/<recording> \
+    --config config/phone_default.yaml \
+    --output outputs/phone_scan
+```
+
+Verify:
+
+```text
+depth scale is metric
+camera poses are finite
+trajectory orientation looks sensible
+point cloud is not mirrored
+point cloud is not upside down
+scene dimensions are plausible
+mesh is non-empty
+```
+
+Generate:
+
+```text
+phone_trajectory.png
+phone_pointcloud.ply
+phone_mesh.ply
+phone_mesh_preview.png
+phone_stats.json
+phone_report.md
 ```
 
 ---
 
-# 18. Confidence-aware reconstruction
+# P21 — Add RTAB-Map to the phone recording path
 
-Once basic phone reconstruction works, support an optional preprocessing stage:
+First reconstruct the phone scan directly from ARCore poses.
+
+Once that works, replay the same recording into RTAB-Map:
 
 ```text
-ARCore Raw Depth
-        +
-confidence
-        ↓
-mask unreliable pixels
-        ↓
-RTAB-Map / Open3D
+S24 FE recording
+   │
+   ├── RGB
+   ├── Raw Depth
+   └── ARCore pose as /odom
+   │
+   ▼
+RTAB-Map
+   │
+   ▼
+full optimized trajectory
+   │
+   ▼
+Open3D TSDF
 ```
 
-ARCore's Raw Depth API exists specifically with a matching confidence image, and Google describes Raw Depth as the higher-accuracy but incomplete depth representation useful for geometry and reconstruction tasks.
+Produce both:
 
-Keep the unfiltered data.
+```text
+ARCore-only reconstruction
+RTAB-Map-optimized reconstruction
+```
 
-Filtering should happen offline so we can rerun experiments with different thresholds without rescanning.
+for the same dataset.
+
+Compare:
+
+```text
+trajectory
+map consistency
+start/end drift
+mesh alignment
+loop closures
+```
+
+Do not assume RTAB-Map will necessarily improve every short scan.
+
+Report what actually happens.
 
 ---
 
-# 19. Explicitly out of scope for V1
+# P22 — Add a real loop-closure phone experiment
 
-Do not implement yet:
+After short phone scans work, record:
 
 ```text
-stereo main + ultrawide
+start at desk
+walk around room
+return to desk
+```
+
+Process offline.
+
+Report:
+
+```text
+ARCore start/end pose discrepancy
+RTAB-Map detected loop closures
+RTAB-Map optimized start/end discrepancy
+visual comparison before/after optimization
+```
+
+This becomes the first meaningful phone SLAM demonstration.
+
+---
+
+# P23 — Explicitly out of scope
+
+Do not implement these during this task:
+
+```text
+main + ultrawide stereo
+custom visual-inertial odometry
 ORB-SLAM3
-custom VIO
-AnyDepth / neural monocular depth
+OpenVINS
+AnyDepth
+Depth Anything
+neural depth completion
 Gaussian splatting
 semantic mapping
-real-time mesh reconstruction on phone
-cloud processing
-ROS navigation
+real-time reconstruction
+cloud backend
 ```
 
-The architecture should allow those later, but they must not delay the MVP.
+The existing modular architecture should make these future plug-ins possible.
+
+Do not let them delay the verified ARCore + RTAB-Map + Open3D pipeline.
 
 ---
 
-# 20. Optional experiment after V1
+# Expected final repository architecture
 
-Once the phone pipeline works, add interchangeable pose providers:
-
-```text
-PoseProvider
-├── ARCorePoseProvider
-├── ORBSLAM3PoseProvider
-└── StereoVIOPoseProvider
-```
-
-and interchangeable depth providers:
+Aim for approximately:
 
 ```text
-DepthProvider
-├── ARCoreRawDepthProvider
-├── StereoDepthProvider
-└── LearnedDepthProvider
+phone-slam/
+├── android/
+│   └── app/
+│
+├── config/
+│   ├── tum_fr1_xyz.yaml
+│   ├── tum_fr1_room.yaml
+│   └── phone_default.yaml
+│
+├── docs/
+│   └── results/
+│       ├── tum_xyz/
+│       ├── tum_room/
+│       └── phone/
+│
+├── scripts/
+│   ├── setup.sh
+│   ├── download_tum.sh
+│   ├── run_tum_xyz.sh
+│   ├── run_tum_room.sh
+│   ├── test_benchmarks.sh
+│   ├── build_android.sh
+│   ├── install_android.sh
+│   └── pull_phone_recordings.sh
+│
+├── src/slam_pipeline/
+│   ├── dataset/
+│   │   ├── schema.py
+│   │   ├── association.py
+│   │   ├── tum_rgbd.py
+│   │   └── phone_dataset.py
+│   │
+│   ├── ros/
+│   │   └── dataset_player.py
+│   │
+│   ├── rtabmap/
+│   │   ├── export.py
+│   │   └── database.py
+│   │
+│   ├── reconstruction/
+│   │   └── tsdf.py
+│   │
+│   ├── evaluation/
+│   │   └── trajectory.py
+│   │
+│   └── scripts/
+│       ├── reconstruct_phone.py
+│       ├── reconstruct_rtabmap.py
+│       └── evaluate_rtabmap.py
+│
+└── tests/
 ```
 
-This lets us eventually compare:
-
-```text
-ARCore
-vs
-stereo
-vs
-learned depth
-vs
-hybrid fusion
-```
-
-without changing RTAB-Map or reconstruction code.
+Keep the existing modules where they are already suitable rather than moving files solely to match this exact tree.
 
 ---
 
-# 21. Tests
+# Final required commands
 
-Implement unit tests for:
+The following must actually work from a clean checkout after setup:
 
-### Depth
+```bash
+./scripts/setup.sh
 
-Verify TUM conversion:
+./scripts/run_tum_xyz.sh
 
-```text
-5000 → 1.0 m
-10000 → 2.0 m
-0 → invalid
+./scripts/run_tum_room.sh
+
+./scripts/test_benchmarks.sh
+
+./scripts/build_android.sh
+
+./scripts/install_android.sh
 ```
 
-### Pose conversion
+For phone processing:
 
-Create synthetic poses and confirm:
+```bash
+./scripts/pull_phone_recordings.sh
+```
+
+and:
+
+```bash
+docker compose run --rm slam \
+python3 -m slam_pipeline.scripts.reconstruct_phone \
+    data/phone_recordings/<recording> \
+    --config config/phone_default.yaml \
+    --output outputs/phone_scan
+```
+
+---
+
+# Required final verification report
+
+Before declaring completion, run everything rather than reasoning that it should work.
+
+Return:
+
+## Environment
+
+```text
+git SHA
+ROS version
+RTAB-Map version
+Open3D version
+Python version
+Android Gradle/plugin versions
+ARCore SDK version
+```
+
+## TUM fr1/xyz
+
+```text
+RGB observations
+depth observations
+associated frames
+RTAB-Map nodes
+RTAB-Map constraints
+loop closures
+raw odometry poses
+optimized poses
+ATE
+RPE
+TSDF integrated frames
+mesh vertices
+mesh triangles
+point count
+bounding box
+runtime
+artifact paths
+```
+
+## TUM fr1/room
+
+Same metrics, plus:
+
+```text
+global loop closure count
+before/after optimization trajectory plots
+```
+
+## S24 FE
+
+```text
+device detected by adb
+APK build success
+APK install success
+ARCore Raw Depth support
+recording duration
+RGB frames
+unique Raw Depth updates
+skipped/reprojected Raw Depth frames
+IMU samples
+writer drops
+recording errors
+reconstructed frames
+point count
+mesh vertices
+mesh triangles
+artifact paths
+```
+
+---
+
+# Critical checks before saying “done”
+
+Answer all of these explicitly:
+
+```text
+1. Is TUM depth converted into the units RTAB-Map actually expects?
+
+2. Are optimized poses coming from RTAB-Map global optimization rather
+   than SQLite Node.pose?
+
+3. Does rtabmap-export --opt 0 run successfully?
+
+4. Is timestamp association one-to-one?
+
+5. Does fr1/xyz run end-to-end from one command?
+
+6. Does fr1/room run end-to-end from one command?
+
+7. Are loop-closure statistics extracted from the graph?
+
+8. Is the optimized trajectory actually used for the final TSDF?
+
+9. Do ATE/RPE agree with an independent evaluator?
+
+10. Does the Android recorder detect unique Raw Depth updates by comparing
+    consecutive Raw Depth timestamps?
+
+11. Are ARCore depth and CPU RGB coordinates handled geometrically rather
+    than by blindly resizing?
+
+12. Are the correct intrinsics stored for RGB and Raw Depth?
+
+13. Is disk encoding/writing moved off the AR render thread?
+
+14. Are unexpected Android recording errors visible?
+
+15. Is IMU recorded?
+
+16. Does phone_default.yaml actually affect reconstruction?
+
+17. Has a real S24 FE recording been pulled and reconstructed?
+```
+
+If any answer is “no”, the implementation is not complete.
+
+---
+
+# Priority order
+
+Execute strictly in this order:
+
+```text
+P0  TUM depth units
+P0  RTAB-Map optimized pose export
+ ↓
+P1  timestamp association
+ ↓
+P2–P6 fr1/xyz end-to-end
+ ↓
+P7–P10 fr1/room + benchmark evidence
+ ↓
+P11–P18 Android recorder correctness
+ ↓
+P19–P20 first S24 FE scan
+ ↓
+P21 RTAB-Map on S24 FE recording
+ ↓
+P22 real room loop-closure experiment
+```
+
+Do not work on later phases while a P0/P1 correctness issue remains unresolved.
+
+---
+
+# Implementation philosophy
+
+Prefer:
+
+```text
+simple
+explicit
+testable
+dataset-neutral
+reproducible
+```
+
+over abstraction for its own sake.
+
+Preserve the current strong design choice:
 
 ```text
 T_world_camera
-inverse(T_world_camera)
-quaternion ↔ rotation matrix
 ```
 
-round-trip correctly.
+everywhere internally, with conversion only at external API boundaries. The current Open3D integration already follows this correctly by passing `inverse(T_world_camera)` to Open3D.
 
-### Projection
-
-Given:
+For every external system boundary, document:
 
 ```text
-u, v, Z, fx, fy, cx, cy
+coordinate convention
+units
+timestamp clock/domain
+image encoding
+intrinsics convention
 ```
 
-verify:
+Do not silently guess any of these.
 
-```text
-X = (u-cx)Z/fx
-Y = (v-cy)Z/fy
-```
+Most importantly:
 
-and projection back to pixels.
-
-### Timestamp association
-
-Test:
-
-```text
-RGB timestamps
-depth timestamps
-pose timestamps
-```
-
-with missing and irregular samples.
-
-### TSDF smoke test
-
-Integrate a synthetic plane/cube and confirm non-empty output.
-
-### Full benchmark integration
-
-Run at least a shortened slice of `freiburg1_xyz` in CI if runtime permits.
-
-The complete dataset test may remain a local integration test because benchmark data should not be committed to the repository.
-
----
-
-# 22. Definition of done
-
-The project is NOT complete until all of the following are true:
-
-```text
-[ ] TUM freiburg1_xyz downloaded automatically
-[ ] Dataset parser works
-[ ] RGB/depth/pose timestamps associated correctly
-[ ] Ground-truth Open3D TSDF reconstruction succeeds
-[ ] ROS2 dataset replay works
-[ ] RTAB-Map accepts the externally supplied trajectory
-[ ] RTAB-Map database contains map nodes
-[ ] Optimized trajectory can be exported
-[ ] Final Open3D TSDF reconstruction succeeds
-[ ] .ply point cloud exists and is non-empty
-[ ] .ply mesh exists and is non-empty
-[ ] trajectory metrics are calculated
-[ ] report.md is generated
-[ ] mesh preview is generated
-[ ] no hidden manual steps are required
-[ ] freiburg1_room is run afterward
-[ ] room reconstruction succeeds
-[ ] actual loop-closure result is reported
-[ ] README contains exact reproduction commands
-```
-
----
-
-# 23. Final response required from the agent
-
-When finished, report:
-
-```text
-1. What was implemented.
-
-2. Exact commands to reproduce it.
-
-3. RTAB-Map and dependency versions actually used.
-
-4. TUM sequences actually downloaded.
-
-5. Number of benchmark frames successfully processed.
-
-6. RTAB-Map nodes / constraints / loop closures.
-
-7. ATE/RPE results.
-
-8. Mesh:
-   - vertices
-   - triangles
-   - bounding box.
-
-9. Paths to:
-   - rtabmap.db
-   - optimized trajectory
-   - point cloud
-   - mesh
-   - trajectory plots
-   - mesh previews
-   - report.md
-
-10. Any warnings or remaining limitations.
-```
-
-Do not say “works” without providing these artifacts and measurements.
-
-If anything fails, debug it and continue until either the benchmark works end-to-end or a concrete external blocker has been demonstrated with logs.
-
-# Final architecture to preserve
-
-```text
-                 DATA ACQUISITION
-                       │
-       ┌───────────────┴────────────────┐
-       │                                │
- TUM RGB-D                         S24 FE ARCore
-benchmark adapter                    adapter
-       │                                │
-       └───────────────┬────────────────┘
-                       ▼
-              normalized dataset
-                       │
-              ┌────────┴────────┐
-              │                 │
-              ▼                 ▼
-        external pose       RGB + depth
-              │                 │
-              └────────┬────────┘
-                       ▼
-                    RTAB-Map
-                       │
-             optimized trajectory
-                       │
-                       ▼
-                    Open3D
-                       │
-                  TSDF fusion
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-         point cloud           mesh
-```
-
-Implement the benchmark side completely before beginning Android development.
+**Do not report that something works until it has actually been executed and its outputs inspected.**

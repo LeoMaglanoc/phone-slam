@@ -46,6 +46,7 @@ def main() -> None:
     )
     result["dataset"] = str(args.dataset)
     result["associated_frames"] = len(dataset)
+    result["association"] = dataset.metadata.get("association", {})
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "gt_stats.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2))
@@ -53,4 +54,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

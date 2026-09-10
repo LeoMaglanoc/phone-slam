@@ -13,7 +13,37 @@ import open3d as o3d
 from ..dataset.schema import Dataset, Frame
 
 
-def _read_rgbd(frame: Frame) -> o3d.geometry.RGBDImage:
+def _read_phone_depth(path: Path, width: int, height: int, dtype: np.dtype) -> np.ndarray:
+    values = np.fromfile(path, dtype=dtype)
+    if values.size != width * height:
+        raise ValueError(f"Unexpected binary image size in {path}: {values.size} != {width * height}")
+    return values.reshape(height, width)
+
+
+def _texture_aligned_color(frame: Frame, color: np.ndarray, depth_shape: tuple[int, int]) -> np.ndarray:
+    corners = np.asarray(frame.metadata.get("texture_to_image_corners"), dtype=np.float32)
+    if corners.size != 8:
+        raise ValueError("V2 phone frame is missing texture-to-CPU-image coordinate mapping")
+    corners = corners.reshape(4, 2)
+    depth_height, depth_width = depth_shape
+    u, v = np.meshgrid(
+        (np.arange(depth_width, dtype=np.float32) + 0.5) / depth_width,
+        (np.arange(depth_height, dtype=np.float32) + 0.5) / depth_height,
+    )
+    top = corners[0] * (1.0 - u[..., None]) + corners[1] * u[..., None]
+    bottom = corners[3] * (1.0 - u[..., None]) + corners[2] * u[..., None]
+    image_coordinates = top * (1.0 - v[..., None]) + bottom * v[..., None]
+    return cv2.remap(
+        color,
+        image_coordinates[..., 0],
+        image_coordinates[..., 1],
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
+
+
+def read_color_depth(frame: Frame) -> tuple[np.ndarray, np.ndarray]:
+    """Load a frame as geometrically registered BGR color and native depth."""
     color = cv2.imread(str(frame.rgb_path), cv2.IMREAD_COLOR)
     depth = cv2.imread(str(frame.depth_path), cv2.IMREAD_UNCHANGED)
     if color is None:
@@ -21,26 +51,37 @@ def _read_rgbd(frame: Frame) -> o3d.geometry.RGBDImage:
     if depth is None and frame.depth_path.suffix == ".bin":
         if frame.intrinsics.depth_width is None or frame.intrinsics.depth_height is None:
             raise ValueError("Binary phone depth requires depth dimensions in CameraIntrinsics")
-        expected = frame.intrinsics.depth_width * frame.intrinsics.depth_height
-        values = np.fromfile(frame.depth_path, dtype="<u2")
-        if values.size != expected:
-            raise ValueError(f"Unexpected binary depth size in {frame.depth_path}: {values.size} != {expected}")
-        depth = values.reshape(frame.intrinsics.depth_height, frame.intrinsics.depth_width)
+        depth = _read_phone_depth(
+            frame.depth_path, frame.intrinsics.depth_width, frame.intrinsics.depth_height, np.dtype("<u2")
+        )
     if depth is None:
         raise IOError(f"Could not read depth image: {frame.depth_path}")
     if depth.shape[:2] != color.shape[:2]:
-        depth = cv2.resize(depth, (color.shape[1], color.shape[0]), interpolation=cv2.INTER_NEAREST)
+        if frame.metadata.get("depth_registration_strategy") == "texture_to_cpu_bilinear":
+            color = _texture_aligned_color(frame, color, depth.shape[:2])
+        elif frame.metadata.get("depth_registration_strategy") == "legacy_resize":
+            color = cv2.resize(color, (depth.shape[1], depth.shape[0]), interpolation=cv2.INTER_LINEAR)
+        else:
+            raise ValueError(
+                f"RGB/depth dimensions differ for frame {frame.frame_id} without a documented registration mapping"
+            )
     if frame.confidence_path is not None and frame.intrinsics.confidence_min > 0:
         confidence = cv2.imread(str(frame.confidence_path), cv2.IMREAD_UNCHANGED)
         if confidence is None and frame.confidence_path.suffix == ".bin":
             if frame.intrinsics.depth_width is None or frame.intrinsics.depth_height is None:
                 raise ValueError("Binary confidence requires depth dimensions in CameraIntrinsics")
-            confidence = np.fromfile(frame.confidence_path, dtype=np.uint8).reshape(
-                frame.intrinsics.depth_height, frame.intrinsics.depth_width
+            confidence = _read_phone_depth(
+                frame.confidence_path, frame.intrinsics.depth_width, frame.intrinsics.depth_height, np.dtype(np.uint8)
             )
         if confidence is not None:
-            confidence = cv2.resize(confidence, (color.shape[1], color.shape[0]), interpolation=cv2.INTER_NEAREST)
+            if confidence.shape != depth.shape:
+                raise ValueError(f"Confidence/depth dimensions differ for frame {frame.frame_id}")
             depth[confidence < frame.intrinsics.confidence_min] = 0
+    return color, depth
+
+
+def _read_rgbd(frame: Frame) -> o3d.geometry.RGBDImage:
+    color, depth = read_color_depth(frame)
     color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
     color_image = o3d.geometry.Image(np.ascontiguousarray(color))
     depth_image = o3d.geometry.Image(np.ascontiguousarray(depth))
@@ -66,14 +107,6 @@ def reconstruct_tsdf(
     output_dir.mkdir(parents=True, exist_ok=True)
     if frame_stride < 1:
         raise ValueError("frame_stride must be >= 1")
-    intrinsics = o3d.camera.PinholeCameraIntrinsic(
-        dataset.intrinsics.width,
-        dataset.intrinsics.height,
-        dataset.intrinsics.fx,
-        dataset.intrinsics.fy,
-        dataset.intrinsics.cx,
-        dataset.intrinsics.cy,
-    )
     volume = o3d.pipelines.integration.ScalableTSDFVolume(
         voxel_length=voxel_length,
         sdf_trunc=sdf_trunc,
@@ -84,6 +117,14 @@ def reconstruct_tsdf(
         if index % frame_stride:
             continue
         rgbd = _read_rgbd(frame)
+        intrinsics = o3d.camera.PinholeCameraIntrinsic(
+            frame.intrinsics.width,
+            frame.intrinsics.height,
+            frame.intrinsics.fx,
+            frame.intrinsics.fy,
+            frame.intrinsics.cx,
+            frame.intrinsics.cy,
+        )
         # Open3D's integrate() wants world-to-camera, while our public
         # convention is camera-to-world.
         volume.integrate(rgbd, intrinsics, np.linalg.inv(frame.T_world_camera))

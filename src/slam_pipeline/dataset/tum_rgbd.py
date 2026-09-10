@@ -1,11 +1,10 @@
 """Loader and timestamp association for the TUM RGB-D benchmark."""
 
 from pathlib import Path
-from typing import Iterable
-
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from .association import associate_sorted_unique
 from .schema import CameraIntrinsics, Dataset, Frame
 
 
@@ -41,25 +40,6 @@ def _read_groundtruth(path: Path) -> list[tuple[float, np.ndarray]]:
     return records
 
 
-def _associate(
-    first: Iterable[tuple[float, object]],
-    second: Iterable[tuple[float, object]],
-    max_difference_s: float,
-) -> list[tuple[tuple[float, object], tuple[float, object]]]:
-    """Associate each first stream record with one nearest unused second record."""
-    left = list(first)
-    right = list(second)
-    associations = []
-    j = 0
-    for current in left:
-        timestamp = current[0]
-        while j + 1 < len(right) and abs(right[j + 1][0] - timestamp) <= abs(right[j][0] - timestamp):
-            j += 1
-        if right and abs(right[j][0] - timestamp) <= max_difference_s:
-            associations.append((current, right[j]))
-    return associations
-
-
 def load_tum_dataset(
     root: str | Path,
     *,
@@ -78,17 +58,16 @@ def load_tum_dataset(
     rgb = _read_index(root / "rgb.txt")
     depth = _read_index(root / "depth.txt")
     groundtruth = _read_groundtruth(root / "groundtruth.txt")
-    rgb_depth = _associate(rgb, depth, max_rgb_depth_difference_s)
+    rgb_depth = associate_sorted_unique(rgb, depth, max_rgb_depth_difference_s)
+    rgb_depth_records = rgb_depth.pairs(rgb, depth)
+    rgb_depth_by_timestamp = [(rgb_record[0], (rgb_record, depth_record)) for rgb_record, depth_record in rgb_depth_records]
+    rgb_depth_pose = associate_sorted_unique(rgb_depth_by_timestamp, groundtruth, max_pose_difference_s)
     frames: list[Frame] = []
-    for frame_id, (rgb_record, depth_record) in enumerate(rgb_depth):
+    for frame_id, match in enumerate(rgb_depth_pose.matches):
+        rgb_record, depth_record = rgb_depth_by_timestamp[match.first_index][1]
         rgb_timestamp, rgb_relative = rgb_record
         depth_timestamp, depth_relative = depth_record
-        pose_matches = _associate(
-            [(rgb_timestamp, None)], groundtruth, max_pose_difference_s
-        )
-        if not pose_matches:
-            continue
-        pose_timestamp, pose = pose_matches[0][1]
+        pose_timestamp, pose = groundtruth[match.second_index]
         frames.append(
             Frame(
                 frame_id=frame_id,
@@ -103,5 +82,21 @@ def load_tum_dataset(
         )
     if not frames:
         raise RuntimeError(f"No associated RGB/depth/ground-truth frames found in {root}")
-    return Dataset(root=root, intrinsics=intrinsics, frames=frames, name=root.name)
-
+    return Dataset(
+        root=root,
+        intrinsics=intrinsics,
+        frames=frames,
+        name=root.name,
+        metadata={
+            "association": {
+                "rgb_observations": len(rgb),
+                "depth_observations": len(depth),
+                "pose_observations": len(groundtruth),
+                "associated_rgb_depth_pairs": len(rgb_depth.matches),
+                "associated_rgb_depth_pose_triples": len(rgb_depth_pose.matches),
+                "dropped_rgb_frames": len(rgb) - len(rgb_depth_pose.matches),
+                "rgb_depth": rgb_depth.stats.as_dict(),
+                "rgb_depth_pose": rgb_depth_pose.stats.as_dict(),
+            }
+        },
+    )

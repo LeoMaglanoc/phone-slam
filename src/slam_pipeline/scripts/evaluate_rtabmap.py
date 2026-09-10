@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..dataset.tum_rgbd import _read_groundtruth
 from ..evaluation.trajectory import evaluate_trajectories
-from ..ros.trajectory_export import read_rtabmap_trajectory
+from ..rtabmap.export import export_rtabmap_trajectory
 
 
 def main() -> None:
@@ -19,16 +19,29 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    timestamps, poses = read_rtabmap_trajectory(args.database)
-    trajectory_path = args.output / "rtabmap_trajectory.txt"
-    from ..evaluation.trajectory import poses_to_tum
-
-    poses_to_tum(timestamps, poses, trajectory_path)
     groundtruth = _read_groundtruth(args.dataset / "groundtruth.txt")
     gt_timestamps = __import__("numpy").asarray([item[0] for item in groundtruth], dtype=float)
     gt_poses = [item[1] for item in groundtruth]
-    metrics = evaluate_trajectories(gt_timestamps, gt_poses, timestamps, poses, args.output)
-    metrics["trajectory_path"] = str(trajectory_path)
+    raw_path = args.output / "raw_odom_trajectory.txt"
+    optimized_path = args.output / "optimized_trajectory.txt"
+    raw_timestamps, raw_poses, _ = export_rtabmap_trajectory(args.database, raw_path, optimization="raw")
+    optimized_timestamps, optimized_poses, _ = export_rtabmap_trajectory(
+        args.database, optimized_path, optimization="full"
+    )
+    raw_metrics = evaluate_trajectories(
+        gt_timestamps, gt_poses, raw_timestamps, raw_poses, args.output, artifact_prefix="raw_odometry"
+    )
+    optimized_metrics = evaluate_trajectories(
+        gt_timestamps, gt_poses, optimized_timestamps, optimized_poses, args.output, artifact_prefix="optimized"
+    )
+    import shutil
+
+    shutil.copy2(args.output / "optimized_comparison.png", args.output / "trajectory_comparison.png")
+    shutil.copy2(args.output / "optimized_ate_error.png", args.output / "ate_error.png")
+    metrics = {
+        "raw_odometry": {**raw_metrics, "trajectory_path": str(raw_path)},
+        "optimized": {**optimized_metrics, "trajectory_path": str(optimized_path)},
+    }
     (args.output / "trajectory_metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(metrics, indent=2))
 

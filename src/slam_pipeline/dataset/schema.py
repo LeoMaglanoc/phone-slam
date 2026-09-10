@@ -6,7 +6,7 @@ to world coordinates with ``p_world = T_world_camera @ p_camera``.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import numpy as np
 
@@ -44,6 +44,7 @@ class Frame:
     pose_timestamp_ns: Optional[int] = None
     confidence_path: Optional[Path] = None
     imu_timestamp_ns: Optional[int] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         pose = np.asarray(self.T_world_camera, dtype=np.float64)
@@ -58,6 +59,7 @@ class Dataset:
     intrinsics: CameraIntrinsics
     frames: list[Frame] = field(default_factory=list)
     name: str = "dataset"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.frames)

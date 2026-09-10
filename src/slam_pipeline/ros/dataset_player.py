@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import threading
 import time
 from pathlib import Path
@@ -22,6 +23,8 @@ from tf2_ros import TransformBroadcaster
 from ..dataset.schema import Dataset, Frame
 from ..dataset.phone_dataset import load_phone_dataset
 from ..dataset.tum_rgbd import load_tum_dataset
+from ..reconstruction.tsdf import read_color_depth
+from .depth import raw_depth_to_meters
 
 
 def _stamp(timestamp_ns: int, message: Image | CameraInfo | Odometry) -> None:
@@ -47,6 +50,7 @@ class DatasetPlayer(Node):
         depth_topic: str,
         camera_info_topic: str,
         odom_topic: str,
+        summary_path: Path | None = None,
     ) -> None:
         super().__init__("dataset_player")
         qos = QoSProfile(depth=10)
@@ -59,6 +63,14 @@ class DatasetPlayer(Node):
         self._camera_info_pub = self.create_publisher(CameraInfo, camera_info_topic, qos)
         self._odom_pub = self.create_publisher(Odometry, odom_topic, qos)
         self._tf_broadcaster = TransformBroadcaster(self)
+        self._summary_path = summary_path
+        self._published_rgb_frames = 0
+        self._published_depth_frames = 0
+        self._published_odometry_poses = 0
+        self._error: Exception | None = None
+        self._done = False
+        self._start_epoch_s = time.time()
+        self._start_monotonic_s = time.monotonic()
         self._thread = threading.Thread(target=self._publish_all, daemon=True)
         self._thread.start()
 
@@ -76,10 +88,7 @@ class DatasetPlayer(Node):
         return message
 
     def _publish_frame(self, frame: Frame) -> None:
-        color = cv2.imread(str(frame.rgb_path), cv2.IMREAD_COLOR)
-        depth = cv2.imread(str(frame.depth_path), cv2.IMREAD_UNCHANGED)
-        if color is None or depth is None:
-            raise FileNotFoundError(f"Could not read frame {frame.frame_id}: {frame.rgb_path} / {frame.depth_path}")
+        color, depth = read_color_depth(frame)
         if color.shape[:2] != (frame.intrinsics.height, frame.intrinsics.width):
             raise ValueError(f"Unexpected RGB shape {color.shape} for frame {frame.frame_id}")
         if depth.shape[:2] != color.shape[:2]:
@@ -87,7 +96,10 @@ class DatasetPlayer(Node):
 
         stamp_ns = frame.timestamp_ns
         rgb_message = self._bridge.cv2_to_imgmsg(cv2.cvtColor(color, cv2.COLOR_BGR2RGB), encoding="rgb8")
-        depth_message = self._bridge.cv2_to_imgmsg(depth, encoding="16UC1")
+        # RTAB-Map consumes ``32FC1`` as metres. TUM PNG values are units of
+        # 1/5000 m, while ARCore raw-depth values are millimetres (1/1000 m).
+        depth_m = raw_depth_to_meters(depth, frame.intrinsics.depth_scale)
+        depth_message = self._bridge.cv2_to_imgmsg(depth_m, encoding="32FC1")
         rgb_message.header.frame_id = "camera_link"
         depth_message.header.frame_id = "camera_link"
         _stamp(stamp_ns, rgb_message)
@@ -120,6 +132,26 @@ class DatasetPlayer(Node):
         self._rgb_pub.publish(rgb_message)
         self._depth_pub.publish(depth_message)
         self._camera_info_pub.publish(info_message)
+        self._published_rgb_frames += 1
+        self._published_depth_frames += 1
+        self._published_odometry_poses += 1
+
+    def _write_summary(self, attempted_frames: int) -> None:
+        summary = {
+            "dataset": self._dataset.name,
+            "attempted_frames": attempted_frames,
+            "published_rgb_frames": self._published_rgb_frames,
+            "published_depth_frames": self._published_depth_frames,
+            "published_odometry_poses": self._published_odometry_poses,
+            "dropped_or_rejected_frames": attempted_frames - self._published_rgb_frames,
+            "start_timestamp_epoch_s": self._start_epoch_s,
+            "end_timestamp_epoch_s": time.time(),
+            "runtime_s": time.monotonic() - self._start_monotonic_s,
+            "error": str(self._error) if self._error else None,
+        }
+        if self._summary_path is not None:
+            self._summary_path.parent.mkdir(parents=True, exist_ok=True)
+            self._summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
     def _publish_all(self) -> None:
         frames = self._dataset.frames[: self._max_frames]
@@ -134,7 +166,9 @@ class DatasetPlayer(Node):
             self.get_logger().info(f"Published {len(frames)} frames from {self._dataset.name}")
         except Exception as error:  # pragma: no cover - exercised by live replay
             self.get_logger().error(str(error))
+            self._error = error
         finally:
+            self._write_summary(len(frames))
             self._done = True
 
 
@@ -148,24 +182,30 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--depth-topic", default="/camera/depth_registered/image_raw")
     parser.add_argument("--camera-info-topic", default="/camera/rgb/camera_info")
     parser.add_argument("--odom-topic", default="/odom")
+    parser.add_argument("--summary", type=Path, help="Write replay counts and timing as JSON.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = _arguments()
     config = __import__("yaml").safe_load(args.config.read_text(encoding="utf-8"))
-    camera = config["camera"]
-    from ..dataset.schema import CameraIntrinsics
-
-    intrinsics = CameraIntrinsics(
-        width=int(camera["width"]), height=int(camera["height"]), fx=float(camera["fx"]), fy=float(camera["fy"]),
-        cx=float(camera["cx"]), cy=float(camera["cy"]), depth_scale=float(camera.get("depth_scale", 5000.0)),
-        depth_trunc=float(camera.get("depth_trunc", 4.0)),
-    )
     association = config.get("association", {})
     if (args.dataset / "manifest.json").exists():
-        dataset = load_phone_dataset(args.dataset)
+        dataset = load_phone_dataset(
+            args.dataset,
+            max_pose_difference_s=float(association.get("max_pose_difference_s", 0.01)),
+            confidence_min=int(config.get("confidence_min", 0)),
+            depth_trunc_m=float(config.get("depth_trunc_m", 15.0)),
+        )
     else:
+        camera = config["camera"]
+        from ..dataset.schema import CameraIntrinsics
+
+        intrinsics = CameraIntrinsics(
+            width=int(camera["width"]), height=int(camera["height"]), fx=float(camera["fx"]), fy=float(camera["fy"]),
+            cx=float(camera["cx"]), cy=float(camera["cy"]), depth_scale=float(camera.get("depth_scale", 5000.0)),
+            depth_trunc=float(camera.get("depth_trunc", 4.0)),
+        )
         dataset = load_tum_dataset(
             args.dataset,
             intrinsics=intrinsics,
@@ -176,6 +216,7 @@ def main() -> None:
     node = DatasetPlayer(
         dataset, rate=max(args.rate, 1e-6), max_frames=args.max_frames, rgb_topic=args.rgb_topic,
         depth_topic=args.depth_topic, camera_info_topic=args.camera_info_topic, odom_topic=args.odom_topic,
+        summary_path=args.summary,
     )
     try:
         while rclpy.ok() and not getattr(node, "_done", False):
@@ -183,6 +224,8 @@ def main() -> None:
     finally:
         node.destroy_node()
         rclpy.shutdown()
+    if node._error is not None:
+        raise RuntimeError("Dataset replay failed") from node._error
 
 
 if __name__ == "__main__":
