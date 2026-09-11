@@ -14,18 +14,18 @@ mkdir -p "$output"
 rm -f "$output/rtabmap.db" "$output/rtabmap.log" "$output/odom.log" \
   "$output/replay_summary.json" "$output/drain_summary.json" "$output/graph_stats.json" "$output/odometry_poses.txt"
 
-scripts/download_tum.sh freiburg3_long_office_household
 python3 -m slam_pipeline.scripts.benchmark_examples "$dataset" --config "$config" --output "$output/examples"
 
-ros2 launch /workspace/scripts/rtabmap_rgbd_odom.launch.py "database_path:=/workspace/$output/rtabmap.db" > "$output/rtabmap.log" 2>&1 &
+# A dedicated process group makes shutdown deterministic: ros2 launch does not
+# otherwise reliably relay SIGINT to both RTAB-Map child nodes in containers.
+setsid ros2 launch /workspace/scripts/rtabmap_rgbd_odom.launch.py "database_path:=/workspace/$output/rtabmap.db" > "$output/rtabmap.log" 2>&1 &
 rtabmap_pid=$!
 python3 -m slam_pipeline.ros.odom_recorder --output "$output/odometry_poses.txt" > "$output/odom.log" 2>&1 &
 odom_pid=$!
 
 shutdown() {
-  for process_id in "$odom_pid" "$rtabmap_pid"; do
-    if kill -0 "$process_id" 2>/dev/null; then kill -INT "$process_id" 2>/dev/null || true; fi
-  done
+  if kill -0 "$odom_pid" 2>/dev/null; then kill -INT "$odom_pid" 2>/dev/null || true; fi
+  if kill -0 "$rtabmap_pid" 2>/dev/null; then kill -INT -- "-$rtabmap_pid" 2>/dev/null || true; fi
   wait "$odom_pid" 2>/dev/null || true
   wait "$rtabmap_pid" 2>/dev/null || true
 }
@@ -52,7 +52,6 @@ fi
 python3 -m slam_pipeline.scripts.evaluate_rtabmap "$dataset" "$output/rtabmap.db" --config "$config" --output "$output/evaluation"
 python3 -m slam_pipeline.scripts.crosscheck_evo "$dataset/groundtruth.txt" "$output/evaluation/optimized_trajectory.txt" "$output/evaluation/trajectory_metrics.json" --output "$output/evaluation/evo_crosscheck.json"
 python3 -m slam_pipeline.scripts.reconstruct_rtabmap "$dataset" "$output/rtabmap.db" --config "$config" --output "$output/optimized_tsdf"
-scripts/prepare_demo_video.sh freiburg3_long_office_household
 python3 -m slam_pipeline.scripts.export_web_demo "$dataset" --config "$config" --output "$output" --public-dir "web/public/demos/freiburg3_long_office_household"
 python3 -m slam_pipeline.scripts.benchmark_report --sequence freiburg3_long_office_household --dataset "$dataset" --output "$output" --docs-output docs/results/tum_long_office
 python3 -m slam_pipeline.scripts.validate_benchmark "$output" --require-web-demo

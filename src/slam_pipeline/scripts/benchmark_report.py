@@ -116,7 +116,8 @@ def main() -> None:
         "tsdf": tsdf,
         "replay": {**replay, "database_quiescence": quiescence},
     }
-    report = _markdown(f"TUM fr1/{args.sequence} benchmark", values)
+    label = args.sequence if args.sequence.startswith("freiburg") else f"fr1/{args.sequence}"
+    report = _markdown(f"TUM {label} benchmark", values)
     (output / "report.md").write_text(report, encoding="utf-8")
 
     docs_output = args.docs_output

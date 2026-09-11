@@ -8,6 +8,7 @@ from pathlib import Path
 import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
 
 
 class OdomRecorder(Node):
@@ -42,10 +43,13 @@ def main() -> None:
     node = OdomRecorder(args.output, args.topic)
     try:
         rclpy.spin(node)
+    except ExternalShutdownException:
+        pass
     finally:
         node.close()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

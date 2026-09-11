@@ -141,6 +141,9 @@ def main() -> None:
         "The official TUM RGB AVI is transcoded for browser playback; RGB-D frames are used only offline.\n",
         encoding="utf-8",
     )
+    # Video probe data has been embedded in metadata; keep the public bundle
+    # limited to the documented browser-facing files.
+    video_info_path.unlink()
     for asset in ("demo.mp4", "scene.glb", "trajectory.json", "metadata.json", "thumbnail.webp", "attribution.txt"):
         _asset_path(public, asset)
     print(json.dumps({"public_dir": str(public), "trajectory_samples": len(samples), "glb_size_bytes": scene_path.stat().st_size}, indent=2))
