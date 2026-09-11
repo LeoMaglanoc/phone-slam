@@ -9,7 +9,7 @@ avi="$dataset/rgb.avi"
 public_dir="web/public/demos/$sequence"
 mkdir -p "$dataset" "$public_dir"
 if [[ ! -s "$avi" ]]; then
-  curl -fL --retry 3 --retry-delay 2 -o "$avi" "https://cvg.cit.tum.de/rgbd/dataset/freiburg3/rgbd_dataset_freiburg3_long_office_household.avi"
+  curl -fL --retry 3 --retry-delay 2 -o "$avi" "https://cvg.cit.tum.de/rgbd/dataset/freiburg3/rgbd_dataset_freiburg3_long_office_household-rgb.avi"
 fi
 ffmpeg -y -i "$avi" -c:v libx264 -crf 20 -preset slow -pix_fmt yuv420p -movflags +faststart -an "$public_dir/demo.mp4"
 ffprobe -v error -show_entries format=duration,size:stream=codec_name,width,height,r_frame_rate -of json "$public_dir/demo.mp4" > "$public_dir/video_info.json"
