@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 
@@ -15,6 +16,7 @@ def _require_file(path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--require-web-demo", action="store_true")
     args = parser.parse_args()
     output = args.output
     for path in [
@@ -36,6 +38,21 @@ def main() -> None:
     evo = json.loads((output / "evaluation" / "evo_crosscheck.json").read_text(encoding="utf-8"))
     if not evo.get("within_1e-5_tolerance", False):
         raise RuntimeError(f"Project trajectory metrics disagree with evo: {evo}")
+    if args.require_web_demo:
+        demo = Path("web/public/demos/freiburg3_long_office_household")
+        for name in ("demo.mp4", "scene.glb", "trajectory.json", "metadata.json", "thumbnail.webp", "attribution.txt"):
+            _require_file(demo / name)
+        trajectory = json.loads((demo / "trajectory.json").read_text(encoding="utf-8"))
+        metadata = json.loads((demo / "metadata.json").read_text(encoding="utf-8"))
+        values = [*trajectory.get("samples", []), metadata]
+        if not values or "samples" not in trajectory:
+            raise RuntimeError("Web trajectory is empty")
+        def finite(value: object) -> bool:
+            if isinstance(value, dict): return all(finite(item) for item in value.values())
+            if isinstance(value, list): return all(finite(item) for item in value)
+            return not isinstance(value, float) or math.isfinite(value)
+        if not finite(values):
+            raise RuntimeError("Web artifacts contain NaN/Inf")
     print(f"Validated benchmark artifacts: {output}")
 
 

@@ -15,3 +15,5 @@ android/debug.keystore
 android/.gradle/
 android/app/build/
 android/.idea/
+web/node_modules/
+web/dist/

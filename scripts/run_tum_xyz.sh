@@ -2,4 +2,4 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-exec ./scripts/run_tum_benchmark.sh xyz
+exec ./scripts/run_tum.sh freiburg1_xyz

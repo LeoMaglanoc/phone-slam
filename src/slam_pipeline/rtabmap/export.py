@@ -18,6 +18,20 @@ from scipy.spatial.transform import Rotation
 _OPTIMIZATION = {"full": "0", "raw": "3"}
 
 
+def resolve_rtabmap_executable(executable: str = "rtabmap-export") -> tuple[str, Path | None]:
+    """Resolve a CLI from PATH or the active ROS installation consistently."""
+    resolved = shutil.which(executable)
+    ros_prefix: Path | None = None
+    if resolved is None:
+        candidate_prefix = Path("/opt/ros") / os.environ.get("ROS_DISTRO", "jazzy")
+        candidate = candidate_prefix / "bin" / executable
+        if candidate.is_file():
+            resolved, ros_prefix = str(candidate), candidate_prefix
+    if resolved is None:
+        raise FileNotFoundError(f"Could not find RTAB-Map executable: {executable}")
+    return resolved, ros_prefix
+
+
 def parse_pose_format_11(path: str | Path) -> tuple[np.ndarray, list[np.ndarray], list[int]]:
     """Parse RTAB-Map format 11: stamp, pose quaternion, and node ID."""
     timestamps: list[float] = []
@@ -62,15 +76,7 @@ def export_rtabmap_trajectory(
     if not database.is_file() or database.stat().st_size == 0:
         raise FileNotFoundError(f"RTAB-Map database missing or empty: {database}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    resolved_executable = shutil.which(executable)
-    ros_prefix: Path | None = None
-    if resolved_executable is None and executable == "rtabmap-export":
-        ros_prefix = Path("/opt/ros") / os.environ.get("ROS_DISTRO", "jazzy")
-        ros_exporter = ros_prefix / "bin" / executable
-        if ros_exporter.is_file():
-            resolved_executable = str(ros_exporter)
-    if resolved_executable is None:
-        raise FileNotFoundError(f"Could not find RTAB-Map exporter executable: {executable}")
+    resolved_executable, ros_prefix = resolve_rtabmap_executable(executable)
     prefix = f"{output.stem}_export"
     generated = output.parent / f"{prefix}_poses.txt"
     command = [

@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-sequence="${1:?usage: download_tum.sh xyz|room}"
+sequence="${1:?usage: download_tum.sh xyz|room|freiburg3_long_office_household}"
 case "$sequence" in
-  xyz) name="rgbd_dataset_freiburg1_xyz" ;;
-  room) name="rgbd_dataset_freiburg1_room" ;;
+  xyz|freiburg1_xyz) name="rgbd_dataset_freiburg1_xyz" ;;
+  room|freiburg1_room) name="rgbd_dataset_freiburg1_room" ;;
+  long_office|freiburg3_long_office_household) name="rgbd_dataset_freiburg3_long_office_household" ;;
   *) echo "unknown sequence: $sequence" >&2; exit 2 ;;
 esac
 
-base="https://cvg.cit.tum.de/rgbd/dataset/freiburg1"
+family="${name#rgbd_dataset_}"
+family="${family%%_*}"
+base="https://cvg.cit.tum.de/rgbd/dataset/${family}"
 archive="data/${name}.tgz"
 target="data/${name}"
 mkdir -p data
@@ -23,4 +26,3 @@ fi
 [[ -f "${target}/depth.txt" ]] || { echo "invalid dataset: ${target}" >&2; exit 1; }
 [[ -f "${target}/groundtruth.txt" ]] || { echo "invalid dataset: ${target}" >&2; exit 1; }
 echo "Dataset ready: ${target}"
-

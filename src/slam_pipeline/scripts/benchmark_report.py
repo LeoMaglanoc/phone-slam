@@ -14,6 +14,8 @@ from typing import Any
 
 import open3d as o3d
 
+from ..rtabmap.export import resolve_rtabmap_executable
+
 
 _TUM_URL = "https://cvg.cit.tum.de/data/datasets/rgbd-dataset"
 
@@ -41,7 +43,11 @@ def _git_sha() -> str:
 
 
 def _rtabmap_version() -> str:
-    output = _command("rtabmap-export", "--version")
+    try:
+        executable, _ = resolve_rtabmap_executable("rtabmap-export")
+    except FileNotFoundError as error:
+        return f"unavailable ({error})"
+    output = _command(executable, "--version")
     for line in output.splitlines():
         if line.startswith("RTAB-Map:"):
             return line
@@ -75,7 +81,7 @@ def _markdown(title: str, values: dict[str, Any]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sequence", choices=("xyz", "room"), required=True)
+    parser.add_argument("--sequence", required=True)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--docs-output", type=Path, required=True)
@@ -99,7 +105,7 @@ def main() -> None:
             "rtabmap": _rtabmap_version(),
         },
         "dataset": {
-            "sequence": f"fr1/{args.sequence}",
+            "sequence": args.sequence if args.sequence.startswith("freiburg") else f"fr1/{args.sequence}",
             "source_url": _TUM_URL,
             **{key: value for key, value in association.items() if not isinstance(value, dict)},
         },

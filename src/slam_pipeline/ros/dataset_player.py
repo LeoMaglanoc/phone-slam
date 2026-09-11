@@ -50,6 +50,7 @@ class DatasetPlayer(Node):
         depth_topic: str,
         camera_info_topic: str,
         odom_topic: str,
+        publish_odometry: bool,
         summary_path: Path | None = None,
     ) -> None:
         super().__init__("dataset_player")
@@ -64,8 +65,9 @@ class DatasetPlayer(Node):
         self._rgb_pub = self.create_publisher(Image, rgb_topic, qos)
         self._depth_pub = self.create_publisher(Image, depth_topic, qos)
         self._camera_info_pub = self.create_publisher(CameraInfo, camera_info_topic, qos)
-        self._odom_pub = self.create_publisher(Odometry, odom_topic, qos)
-        self._tf_broadcaster = TransformBroadcaster(self)
+        self._publish_odometry = publish_odometry
+        self._odom_pub = self.create_publisher(Odometry, odom_topic, qos) if publish_odometry else None
+        self._tf_broadcaster = TransformBroadcaster(self) if publish_odometry else None
         self._summary_path = summary_path
         self._published_rgb_frames = 0
         self._published_depth_frames = 0
@@ -110,6 +112,14 @@ class DatasetPlayer(Node):
         info_message = self._camera_info(frame)
         _stamp(stamp_ns, info_message)
 
+        if not self._publish_odometry:
+            self._camera_info_pub.publish(info_message)
+            self._rgb_pub.publish(rgb_message)
+            self._depth_pub.publish(depth_message)
+            self._published_rgb_frames += 1
+            self._published_depth_frames += 1
+            return
+
         odom = Odometry()
         odom.header.frame_id = "odom"
         odom.child_frame_id = "camera_link"
@@ -135,6 +145,7 @@ class DatasetPlayer(Node):
 
         # Odometry is sent before the sensor images so RTAB-Map can associate it
         # with the RGB-D tuple.
+        assert self._odom_pub is not None and self._tf_broadcaster is not None
         self._odom_pub.publish(odom)
         self._tf_broadcaster.sendTransform(transform)
         self._rgb_pub.publish(rgb_message)
@@ -189,6 +200,8 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--depth-topic", default="/camera/depth_registered/image_raw")
     parser.add_argument("--camera-info-topic", default="/camera/rgb/camera_info")
     parser.add_argument("--odom-topic", default="/odom")
+    parser.add_argument("--publish-odometry", choices=("true", "false"), default="true",
+                        help="Publish external poses. Set false when RTAB-Map RGB-D odometry provides /odom.")
     parser.add_argument("--summary", type=Path, help="Write replay counts and timing as JSON.")
     return parser.parse_args()
 
@@ -218,11 +231,13 @@ def main() -> None:
             intrinsics=intrinsics,
             max_rgb_depth_difference_s=float(association.get("max_rgb_depth_difference_s", 0.02)),
             max_pose_difference_s=float(association.get("max_pose_difference_s", 0.02)),
+            require_groundtruth=args.publish_odometry == "true",
         )
     rclpy.init()
     node = DatasetPlayer(
         dataset, rate=max(args.rate, 1e-6), max_frames=args.max_frames, rgb_topic=args.rgb_topic,
         depth_topic=args.depth_topic, camera_info_topic=args.camera_info_topic, odom_topic=args.odom_topic,
+        publish_odometry=args.publish_odometry == "true",
         summary_path=args.summary,
     )
     try:

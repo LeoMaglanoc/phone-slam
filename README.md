@@ -26,6 +26,7 @@ remain in `data/` and `outputs/` on the host.
 ./scripts/setup.sh
 ./scripts/run_tum_xyz.sh
 ./scripts/run_tum_room.sh
+./scripts/run_tum_long_office.sh
 ./scripts/test_benchmarks.sh
 ./scripts/build_android.sh
 ```
@@ -76,3 +77,23 @@ depth and pose. Multi-camera stereo is out of scope for this pipeline.
 TUM archives, phone recordings, databases, APKs, and generated geometry are
 ignored by Git. Small benchmark reports, JSON metrics, and preview PNGs are
 kept in `docs/results/`.
+
+## Public Freiburg viewer demo
+
+`freiburg3_long_office_household` is the public demonstration sequence. Unlike
+the two regression benchmarks, it does **not** feed TUM ground truth into
+RTAB-Map: RGB-D odometry produces `/odom`, RTAB-Map performs loop closure and
+global optimization, and TUM ground truth is used only afterward for ATE/RPE.
+
+```bash
+./scripts/run_tum.sh freiburg3_long_office_household
+cd web && npm ci && npm run build
+```
+
+The one-command reconstruction downloads the official data and presentation AVI,
+transcodes `demo.mp4`, writes a colored metric TSDF mesh, then creates the
+browser-only bundle under `web/public/demos/freiburg3_long_office_household/`.
+It refuses to accept a run with zero global loop closures. `scene.glb` and
+`trajectory.json` are converted together to Three.js coordinates offline;
+browser code performs display only. The source PLY, database, logs, data
+archives, and other heavy artifacts stay ignored in `outputs/`/`data/`.

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
-sequence="${1:?usage: run_tum_benchmark_container.sh xyz|room}"
+sequence="${1:?usage: run_tum_benchmark_container.sh xyz|room|freiburg3_long_office_household}"
 case "${sequence}" in
-  xyz) dataset="data/rgbd_dataset_freiburg1_xyz"; config="config/tum_fr1_xyz.yaml"; output="outputs/tum_xyz" ;;
-  room) dataset="data/rgbd_dataset_freiburg1_room"; config="config/tum_fr1_room.yaml"; output="outputs/tum_room" ;;
+  xyz|freiburg1_xyz) dataset="data/rgbd_dataset_freiburg1_xyz"; config="config/tum_fr1_xyz.yaml"; output="outputs/tum_xyz"; dataset_key="xyz" ;;
+  room|freiburg1_room) dataset="data/rgbd_dataset_freiburg1_room"; config="config/tum_fr1_room.yaml"; output="outputs/tum_room"; dataset_key="room" ;;
+  long_office|freiburg3_long_office_household) dataset="data/rgbd_dataset_freiburg3_long_office_household"; config="config/tum_freiburg3_long_office_household.yaml"; output="outputs/tum_long_office"; dataset_key="freiburg3_long_office_household" ;;
   *) echo "unknown TUM sequence: ${sequence}" >&2; exit 2 ;;
 esac
 
@@ -14,7 +15,7 @@ source /opt/ros/jazzy/setup.bash
 set -u
 mkdir -p "${output}"
 rm -f "${output}/rtabmap.db" "${output}/rtabmap.log" "${output}/replay_summary.json" "${output}/drain_summary.json" "${output}/graph_stats.json"
-scripts/download_tum.sh "${sequence}"
+scripts/download_tum.sh "${dataset_key}"
 
 python3 -m slam_pipeline.scripts.run_ground_truth "${dataset}" --config "${config}" --output "${output}/ground_truth"
 python3 -m slam_pipeline.scripts.benchmark_examples "${dataset}" --config "${config}" --output "${output}/examples"
@@ -62,5 +63,5 @@ python3 -m slam_pipeline.scripts.inspect_rtabmap "${output}/rtabmap.db" --output
 python3 -m slam_pipeline.scripts.evaluate_rtabmap "${dataset}" "${output}/rtabmap.db" --config "${config}" --output "${output}/evaluation"
 python3 -m slam_pipeline.scripts.crosscheck_evo "${dataset}/groundtruth.txt" "${output}/evaluation/optimized_trajectory.txt" "${output}/evaluation/trajectory_metrics.json" --output "${output}/evaluation/evo_crosscheck.json"
 python3 -m slam_pipeline.scripts.reconstruct_rtabmap "${dataset}" "${output}/rtabmap.db" --config "${config}" --output "${output}/optimized_tsdf"
-python3 -m slam_pipeline.scripts.benchmark_report --sequence "${sequence}" --dataset "${dataset}" --output "${output}" --docs-output "docs/results/tum_${sequence}"
+python3 -m slam_pipeline.scripts.benchmark_report --sequence "${dataset_key}" --dataset "${dataset}" --output "${output}" --docs-output "docs/results/tum_${dataset_key}"
 python3 -m slam_pipeline.scripts.validate_benchmark "${output}"
