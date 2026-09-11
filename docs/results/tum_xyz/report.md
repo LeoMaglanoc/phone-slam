@@ -2,12 +2,12 @@
 
 ## Environment
 
-- git_sha: `392b4ca5b3c937bd135c169b7d4c30c0a25159ac`
-- date_utc: `2026-09-10T21:06:28.775936+00:00`
+- git_sha: `659f6bf5d9e1fd7dd3f2322b6cd7556334ba9876`
+- date_utc: `2026-09-11T09:29:50.231619+00:00`
 - python: `3.12.3`
 - open3d: `0.19.0`
 - ros: `jazzy`
-- rtabmap: `unavailable ([Errno 2] No such file or directory: 'rtabmap-export')`
+- rtabmap: `RTAB-Map:               0.22.1`
 
 ## Dataset and association
 
@@ -22,68 +22,68 @@
 
 ## RTAB-Map graph
 
-- node_count: 203
-- link_count: 527
-- database_size_bytes: 87916544
-- first_node_stamp: 1305031102.475318
-- last_node_stamp: 1305031128.679282
-- neighbor_link_count: 202
-- global_loop_closure_count: 118
-- local_space_closure_count: 207
+- node_count: 193
+- link_count: 492
+- database_size_bytes: 84041728
+- first_node_stamp: 1305031102.211214
+- last_node_stamp: 1305031128.747363
+- neighbor_link_count: 192
+- global_loop_closure_count: 91
+- local_space_closure_count: 209
 - local_time_closure_count: 0
 
 ## Trajectory metrics
 
 ### Raw Odometry
 
-- associated_poses: 202
-- ate_rmse_m: 2.2255927286015834e-16
-- ate_mean_m: 1.8337315717179569e-16
-- ate_median_m: 2.220446049250313e-16
-- ate_max_m: 3.8459253727671276e-16
-- rpe_translation_rmse_m: 3.602448825026074e-08
-- rpe_rotation_rmse_rad: 1.4063276119281752e-06
-- max_timestamp_residual_s: 0.004936933517456055
-- mean_timestamp_residual_s: 0.002920982861282802
+- associated_poses: 192
+- ate_rmse_m: 2.90053511851375e-16
+- ate_mean_m: 2.627720271325722e-16
+- ate_median_m: 2.482534153247273e-16
+- ate_max_m: 4.577566798522237e-16
+- rpe_translation_rmse_m: 4.291330575922854e-08
+- rpe_rotation_rmse_rad: 1.4499941018778018e-06
+- max_timestamp_residual_s: 0.007564067840576172
+- mean_timestamp_residual_s: 0.0030558332800865173
 
 ### Optimized
 
-- associated_poses: 202
-- ate_rmse_m: 0.004714898273388859
-- ate_mean_m: 0.004355372557349483
-- ate_median_m: 0.004530134657081769
-- ate_max_m: 0.012688036389530215
-- rpe_translation_rmse_m: 0.0004009467277341939
-- rpe_rotation_rmse_rad: 0.00010575820514529481
-- max_timestamp_residual_s: 0.004936933517456055
-- mean_timestamp_residual_s: 0.002920982861282802
+- associated_poses: 192
+- ate_rmse_m: 0.004109787049466327
+- ate_mean_m: 0.0036126595913068458
+- ate_median_m: 0.003161377585978468
+- ate_max_m: 0.01236807280094032
+- rpe_translation_rmse_m: 0.0003814139015122018
+- rpe_rotation_rmse_rad: 9.147745625020066e-05
+- max_timestamp_residual_s: 0.007564067840576172
+- mean_timestamp_residual_s: 0.0030558332800865173
 
 ## Independent evaluator cross-check
 
-- evo_ape_rmse_m: 0.004715
-- project_ate_rmse_m: 0.004714898273388859
-- evo_rpe_translation_rmse_m: 0.000401
-- project_rpe_translation_rmse_m: 0.0004009467277341939
-- evo_rpe_rotation_rmse_rad: 0.000106
-- project_rpe_rotation_rmse_rad: 0.00010575820514529481
-- ate_rmse_difference_m: 1.0172661114079412e-07
-- rpe_translation_rmse_difference_m: 5.327226580611327e-08
-- rpe_rotation_rmse_difference_rad: 2.4179485470519403e-07
+- evo_ape_rmse_m: 0.00411
+- project_ate_rmse_m: 0.004109787049466327
+- evo_rpe_translation_rmse_m: 0.000381
+- project_rpe_translation_rmse_m: 0.0003814139015122018
+- evo_rpe_rotation_rmse_rad: 9.1e-05
+- project_rpe_rotation_rmse_rad: 9.147745625020066e-05
+- ate_rmse_difference_m: 2.129505336729079e-07
+- rpe_translation_rmse_difference_m: 4.139015122018013e-07
+- rpe_rotation_rmse_difference_rad: 4.77456250200654e-07
 - within_1e-5_tolerance: True
 ## TSDF
 
-- mesh_vertices: 29142
-- mesh_triangles: 46499
-- point_count: 28236
-- bounding_box_min: [-2.565, -2.235, -0.20682973262029442]
-- bounding_box_max: [1.305, 2.5348598448081296, 1.4249999999999998]
-- bounding_box_size: [3.87, 4.7698598448081295, 1.6318297326202942]
-- integrated_frames: 202
-- associated_frames: 202
-- optimized_rtabmap_poses: 202
+- mesh_vertices: 28948
+- mesh_triangles: 46051
+- point_count: 28243
+- bounding_box_min: [-2.565, -2.235, -0.19499999999999995]
+- bounding_box_max: [1.305, 2.535, 1.4249999999999998]
+- bounding_box_size: [3.87, 4.77, 1.6199999999999997]
+- integrated_frames: 192
+- associated_frames: 192
+- optimized_rtabmap_poses: 192
 - unmatched_rtabmap_poses: 0
-- max_timestamp_difference_s: 0.039817094802856445
-- mean_timestamp_difference_s: 0.033388906186169916
+- max_timestamp_difference_s: 0.039913177490234375
+- mean_timestamp_difference_s: 0.03314127897222837
 - database: outputs/tum_xyz/rtabmap.db
 
 ## Replay and completion
@@ -94,11 +94,11 @@
 - published_depth_frames: 792
 - published_odometry_poses: 792
 - dropped_or_rejected_frames: 0
-- start_timestamp_epoch_s: 1789073942.4814649
-- end_timestamp_epoch_s: 1789074013.575715
-- runtime_s: 71.09424969300017
+- start_timestamp_epoch_s: 1789118864.439266
+- end_timestamp_epoch_s: 1789118940.3917837
+- runtime_s: 75.95251721199747
 - error: None
-- database_quiescence: {'stable': True, 'stable_polls': 5, 'node_count': 203, 'elapsed_s': 5.005964388999928, 'database': {'node_count': 203, 'link_count': 527, 'database_size_bytes': 87916544, 'first_node_stamp': 1305031102.475318, 'last_node_stamp': 1305031128.679282, 'neighbor_link_count': 202, 'global_loop_closure_count': 118, 'local_space_closure_count': 207, 'local_time_closure_count': 0}}
+- database_quiescence: {'stable': True, 'stable_polls': 5, 'node_count': 193, 'elapsed_s': 5.006462877005106, 'database': {'node_count': 193, 'link_count': 492, 'database_size_bytes': 84041728, 'first_node_stamp': 1305031102.211214, 'last_node_stamp': 1305031128.747363, 'neighbor_link_count': 192, 'global_loop_closure_count': 91, 'local_space_closure_count': 209, 'local_time_closure_count': 0}}
 
 ## Warnings / errors
 
