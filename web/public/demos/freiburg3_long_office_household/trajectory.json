@@ -1,6 +1,7 @@
 {
   "units": "meters",
   "coordinate_convention": "threejs_world",
+  "source": "rtabmap_global_pose_graph_optimized",
   "samples": [
     {
       "timestamp": 0.0,

@@ -20,6 +20,7 @@ import yaml
 from scipy.spatial.transform import Rotation
 
 from ..evaluation.trajectory import read_tum_trajectory
+from .sync_web_video_metadata import video_details
 
 
 _TUM_DATASET_URL = "https://cvg.cit.tum.de/data/datasets/rgbd-dataset"
@@ -94,7 +95,12 @@ def main() -> None:
             "position": [float(value) for value in converted[:3, 3]],
             "quaternion": [float(value) for value in quaternion],
         })
-    trajectory = {"units": "meters", "coordinate_convention": "threejs_world", "samples": samples}
+    trajectory = {
+        "units": "meters",
+        "coordinate_convention": "threejs_world",
+        "source": "rtabmap_global_pose_graph_optimized",
+        "samples": samples,
+    }
     if not samples or not _finite(trajectory):
         raise RuntimeError("Trajectory export is empty or non-finite")
     (public / "trajectory.json").write_text(json.dumps(trajectory, indent=2) + "\n", encoding="utf-8")
@@ -105,12 +111,12 @@ def main() -> None:
     metrics = json.loads((output / "evaluation" / "trajectory_metrics.json").read_text(encoding="utf-8"))
     graph = json.loads((output / "graph_stats.json").read_text(encoding="utf-8"))
     replay = json.loads((output / "replay_summary.json").read_text(encoding="utf-8"))
-    video_info_path = public / "video_info.json"
-    if not video_info_path.is_file():
-        raise RuntimeError("Prepare demo.mp4 with scripts/prepare_demo_video.sh before exporting the web demo")
+    video_info_path = output / "rgb_video_info.json"
+    depth_video_info_path = output / "depth_video_info.json"
+    if not video_info_path.is_file() or not depth_video_info_path.is_file():
+        raise RuntimeError("Prepare RGB and depth videos with scripts/prepare_demo_video.sh before exporting the web demo")
     video_info = json.loads(video_info_path.read_text(encoding="utf-8"))
-    stream = next((entry for entry in video_info.get("streams", []) if entry.get("codec_name") == "h264"), {})
-    duration = float(video_info.get("format", {}).get("duration", 0.0))
+    depth_video_info = json.loads(depth_video_info_path.read_text(encoding="utf-8"))
     metadata = {
         "title": "TUM RGB-D — freiburg3_long_office_household",
         "dataset": {"name": "freiburg3_long_office_household", "family": "TUM RGB-D", "url": _TUM_DATASET_URL},
@@ -128,8 +134,9 @@ def main() -> None:
             "rpe_rotation_rmse_rad": float(metrics["optimized"]["rpe_rotation_rmse_rad"]),
         },
         "mesh": {"vertices": len(mesh.vertices), "triangles": len(mesh.triangles), "original_vertices": original_vertices, "original_triangles": original_triangles},
-        "video": {"duration_s": duration, "width": int(stream.get("width", 0)), "height": int(stream.get("height", 0)), "codec": stream.get("codec_name"), "framerate": stream.get("r_frame_rate")},
-        "assets": {"video": "demo.mp4", "mesh": "scene.glb", "trajectory": "trajectory.json", "thumbnail": "thumbnail.webp"},
+        "video": video_details(video_info),
+        "depth_video": {**video_details(depth_video_info), "visualization": "Turbo colorized metric depth; black pixels are invalid measurements."},
+        "assets": {"video": "demo.mp4", "depth_video": "depth.mp4", "mesh": "scene.glb", "trajectory": "trajectory.json", "thumbnail": "thumbnail.webp"},
     }
     metadata["mesh"]["glb_size_bytes"] = scene_path.stat().st_size
     if not _finite(metadata):
@@ -138,13 +145,14 @@ def main() -> None:
     (public / "attribution.txt").write_text(
         "Canonical example: TUM RGB-D Dataset — freiburg3_long_office_household\n"
         f"Source: {_TUM_DATASET_URL}\n"
-        "The official TUM RGB AVI is transcoded for browser playback; RGB-D frames are used only offline.\n",
+        "The official TUM RGB AVI and colorized TUM depth frames are transcoded for browser playback.\n",
         encoding="utf-8",
     )
     # Video probe data has been embedded in metadata; keep the public bundle
     # limited to the documented browser-facing files.
     video_info_path.unlink()
-    for asset in ("demo.mp4", "scene.glb", "trajectory.json", "metadata.json", "thumbnail.webp", "attribution.txt"):
+    depth_video_info_path.unlink()
+    for asset in ("demo.mp4", "depth.mp4", "scene.glb", "trajectory.json", "metadata.json", "thumbnail.webp", "attribution.txt"):
         _asset_path(public, asset)
     print(json.dumps({"public_dir": str(public), "trajectory_samples": len(samples), "glb_size_bytes": scene_path.stat().st_size}, indent=2))
 

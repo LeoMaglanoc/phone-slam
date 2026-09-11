@@ -22,3 +22,13 @@ services:
       - .:/workspace
     stdin_open: true
     tty: true
+
+  web:
+    image: node:22-bookworm-slim
+    working_dir: /workspace/web
+    volumes:
+      - .:/workspace
+      - phone_slam_web_node_modules:/workspace/web/node_modules
+
+volumes:
+  phone_slam_web_node_modules:

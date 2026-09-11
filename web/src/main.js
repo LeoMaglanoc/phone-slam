@@ -9,8 +9,17 @@ const name = new URLSearchParams(window.location.search).get("demo") || "freibur
 const metadataUrl = new URL(DEMOS[name] || DEMOS.freiburg3_long_office_household, new URL(root, window.location.origin));
 const viewerElement = document.querySelector("#viewer");
 const loading = document.querySelector("#loading");
-const video = document.querySelector("#demo-video");
-let trajectoryVisible = true;
+const rgbVideo = document.querySelector("#rgb-video");
+const depthVideo = document.querySelector("#depth-video");
+const mapCanvas = document.querySelector("#map-canvas");
+const mapFallback = document.querySelector("#map-fallback");
+const mapFallbackImage = document.querySelector("#map-fallback-image");
+const mapFallbackMessage = document.querySelector("#map-fallback-message");
+const resetView = document.querySelector("#reset-view");
+const trajectoryToggle = document.querySelector("#trajectory-toggle");
+const copyCameraPose = document.querySelector("#copy-camera-pose");
+const cameraPoseOutput = document.querySelector("#camera-pose-output");
+let trajectoryVisible = false;
 
 function asset(metadata, key) {
   return new URL(`demos/${metadata.dataset.name}/${metadata.assets[key]}`, new URL(root, window.location.origin)).href;
@@ -25,6 +34,15 @@ function setMode(mode) {
   window.dispatchEvent(new Event("resize"));
 }
 
+function showStaticMapFallback(metadata) {
+  mapCanvas.hidden = true;
+  mapFallbackImage.src = asset(metadata, "thumbnail");
+  mapFallbackMessage.textContent = "Interactive 3D rendering needs WebGL, which is unavailable in this browser. Showing the optimized reconstruction preview instead.";
+  mapFallback.hidden = false;
+  loading.hidden = true;
+  document.querySelectorAll("[data-map-control]").forEach((button) => { button.disabled = true; });
+}
+
 async function main() {
   try {
     const response = await fetch(metadataUrl);
@@ -34,18 +52,46 @@ async function main() {
     document.querySelector("#demo-summary").textContent = "Estimated RGB-D odometry → RTAB-Map loop closure → optimized colored TSDF mesh.";
     document.querySelector("#dataset-link").href = metadata.dataset.url;
     document.querySelector("#stats").textContent = `${metadata.slam.input_frames.toLocaleString()} RGB-D frames · ${metadata.slam.graph_nodes.toLocaleString()} graph nodes · ${metadata.slam.global_loop_closures} global loop closures · ${metadata.mesh.triangles.toLocaleString()} web-mesh triangles`;
-    video.src = asset(metadata, "video");
+    rgbVideo.src = asset(metadata, "video");
+    depthVideo.src = asset(metadata, "depth_video");
+    let map;
+    try {
+      map = new MapViewer(mapCanvas, loading);
+    } catch (error) {
+      if (/webgl/i.test(error.message)) {
+        showStaticMapFallback(metadata);
+        return;
+      }
+      throw error;
+    }
     const trajectoryResponse = await fetch(asset(metadata, "trajectory"));
     if (!trajectoryResponse.ok) throw new Error(`Trajectory request failed (${trajectoryResponse.status})`);
     const trajectory = await trajectoryResponse.json();
-    const map = new MapViewer(document.querySelector("#map-canvas"), loading);
+    if (trajectory.source !== "rtabmap_global_pose_graph_optimized") {
+      throw new Error("The published trajectory is not the globally optimized RTAB-Map pose graph");
+    }
     await map.load(asset(metadata, "mesh"), trajectory.samples);
-    document.querySelector("#reset-view").addEventListener("click", () => map.reset());
-    document.querySelector("#trajectory-toggle").addEventListener("click", (event) => {
+    map.setTrajectoryVisible(trajectoryVisible);
+    resetView.addEventListener("click", () => map.reset());
+    trajectoryToggle.addEventListener("click", (event) => {
       trajectoryVisible = !trajectoryVisible;
       map.setTrajectoryVisible(trajectoryVisible);
-      event.currentTarget.textContent = `Trajectory: ${trajectoryVisible ? "on" : "off"}`;
+      event.currentTarget.textContent = `Optimized trajectory: ${trajectoryVisible ? "on" : "off"}`;
       event.currentTarget.setAttribute("aria-pressed", String(trajectoryVisible));
+    });
+    document.querySelectorAll("[data-camera-action]").forEach((button) => {
+      button.addEventListener("click", () => map.adjustCamera(button.dataset.cameraAction));
+    });
+    copyCameraPose.addEventListener("click", async () => {
+      const pose = JSON.stringify(map.cameraPose(), null, 2);
+      cameraPoseOutput.textContent = pose;
+      cameraPoseOutput.hidden = false;
+      try {
+        await navigator.clipboard.writeText(pose);
+        copyCameraPose.textContent = "Pose copied";
+      } catch {
+        copyCameraPose.textContent = "Copy the pose below";
+      }
     });
   } catch (error) {
     loading.textContent = `Viewer failed to load: ${error.message}`;
