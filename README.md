@@ -1,14 +1,100 @@
-# Offline RGB-D SLAM and reconstruction
+# Offline RGB-D SLAM and dense 3D reconstruction
 
-This repository implements an offline RGB-D mapping pipeline:
+Offline RGB-D SLAM and dense 3D reconstruction for both benchmark data and Android phone recordings. TUM RGB-D uses learned-free RGB-D odometry, while the Galaxy S24 FE uses ARCore VIO as the motion estimate; RTAB-Map performs loop closure and pose-graph optimization, and Open3D fuses the optimized RGB-D trajectory into a colored TSDF mesh.
+
+The canonical browser demo uses TUM `freiburg3_long_office_household` and is rendered entirely from precomputed assets—no SLAM runs in the browser.
+
+## Pipeline
 
 ```text
-TUM RGB-D or S24 FE / ARCore recording
-  -> normalized RGB-D + pose dataset
-  -> RTAB-Map external odometry and graph optimization
-  -> optimized camera poses
-  -> Open3D TSDF point cloud and mesh
+                 TUM RGB-D
+              RGB + metric depth
+                      │
+                      ▼
+             RGB-D odometry
+                      │
+                      │
+                      ├─────────────────────┐
+                      │                     │
+Galaxy S24 FE         │                     │
+RGB + Raw Depth       │                     │
++ ARCore VIO ─────────┘                     │
+                                            ▼
+                                        RTAB-Map
+                              place recognition + loop closure
+                                  + pose-graph optimization
+                                            │
+                                            ▼
+                                  optimized SE(3) poses
+                                            │
+                         RGB + depth + pose │
+                                            ▼
+                                      Open3D TSDF
+                                            │
+                                  ┌─────────┴─────────┐
+                                  ▼                   ▼
+                           colored point cloud   colored mesh
+                                                      │
+                                                      ▼
+                                          GLB + trajectory JSON
+                                                      │
+                                                      ▼
+                                             Three.js viewer
 ```
+
+Regression benchmarks can substitute TUM ground-truth poses as external
+odometry to isolate and test the RTAB-Map → optimization → TSDF pipeline.
+Ground truth is not used as odometry in the canonical Freiburg SLAM demo.
+
+## Tech stack
+
+Acquisition
+
+- Kotlin / Android
+- ARCore Raw Depth + VIO
+- Android SensorManager
+- ADB
+
+SLAM / robotics
+
+- ROS 2 Jazzy
+- RTAB-Map
+- Python
+- NumPy / SciPy / OpenCV
+
+Reconstruction / evaluation
+
+- Open3D TSDF
+- evo
+- TUM RGB-D benchmark
+
+Web / tooling
+
+- Three.js
+- Vite
+- JavaScript
+- ffmpeg
+- Docker
+
+## Canonical demo
+
+TUM RGB-D: `freiburg3_long_office_household`
+
+```text
+RGB-D odometry
+    ↓
+481 graph nodes
+    ↓
+90 global loop closures
+    ↓
+global pose-graph optimization
+    ↓
+ATE: 6.15 cm → 4.39 cm
+    ↓
+colored TSDF reconstruction
+```
+
+Live viewer: https://leonardo-maglanoc.com/slam/
 
 ## Pose convention
 

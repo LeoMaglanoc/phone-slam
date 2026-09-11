@@ -14,21 +14,11 @@ from typing import Any
 
 import open3d as o3d
 
-from ..rtabmap.export import resolve_rtabmap_executable
-
-
 _TUM_URL = "https://cvg.cit.tum.de/data/datasets/rgbd-dataset"
 
 
 def _json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _command(*command: str) -> str:
-    try:
-        return subprocess.check_output(command, text=True, stderr=subprocess.STDOUT).strip()
-    except (OSError, subprocess.CalledProcessError) as error:
-        return f"unavailable ({error})"
 
 
 def _git_sha() -> str:
@@ -43,15 +33,25 @@ def _git_sha() -> str:
 
 
 def _rtabmap_version() -> str:
-    try:
-        executable, _ = resolve_rtabmap_executable("rtabmap-export")
-    except FileNotFoundError as error:
-        return f"unavailable ({error})"
-    output = _command(executable, "--version")
-    for line in output.splitlines():
-        if line.startswith("RTAB-Map:"):
-            return line
-    return output.splitlines()[0] if output else "unavailable"
+    """Return the installed RTAB-Map Debian package version.
+
+    ``rtabmap-export`` has no supported version flag, so querying the ROS
+    package database is both reliable and representative of the binary used by
+    the benchmark container.
+    """
+    distro = os.environ.get("ROS_DISTRO", "jazzy")
+    for package in (f"ros-{distro}-rtabmap", f"ros-{distro}-rtabmap-ros"):
+        try:
+            version = subprocess.check_output(
+                ["dpkg-query", "-W", "-f=${Version}", package],
+                text=True,
+                stderr=subprocess.STDOUT,
+            ).strip()
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        if version:
+            return f"{package} {version}"
+    return "unavailable (no installed RTAB-Map Debian package)"
 
 
 def _markdown(title: str, values: dict[str, Any]) -> str:

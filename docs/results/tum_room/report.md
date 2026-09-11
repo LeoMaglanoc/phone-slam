@@ -7,7 +7,7 @@
 - python: `3.12.3`
 - open3d: `0.19.0`
 - ros: `jazzy`
-- rtabmap: `unavailable ([Errno 2] No such file or directory: 'rtabmap-export')`
+- rtabmap: `ros-jazzy-rtabmap 0.22.1-1noble.20260615.173328`
 
 ## Dataset and association
 
