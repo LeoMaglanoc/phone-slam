@@ -87,7 +87,8 @@ def main() -> None:
     parser.add_argument("--docs-output", type=Path, required=True)
     args = parser.parse_args()
     output = args.output
-    gt = _json(output / "ground_truth" / "gt_stats.json")
+    gt_path = output / "ground_truth" / "gt_stats.json"
+    gt = _json(gt_path) if gt_path.is_file() else {}
     graph = _json(output / "graph_stats.json")
     metrics = _json(output / "evaluation" / "trajectory_metrics.json")
     tsdf = _json(output / "optimized_tsdf" / "rtabmap_tsdf_stats.json")
@@ -121,17 +122,21 @@ def main() -> None:
     docs_output = args.docs_output
     docs_output.mkdir(parents=True, exist_ok=True)
     (docs_output / "report.md").write_text(report, encoding="utf-8")
-    for source in [
+    evidence = [
         output / "evaluation" / "trajectory_metrics.json",
         output / "evaluation" / "evo_crosscheck.json",
         output / "graph_stats.json",
         output / "evaluation" / "trajectory_comparison.png",
         output / "evaluation" / "ate_error.png",
-        output / "ground_truth" / "gt_mesh_preview.png",
         output / "optimized_tsdf" / "optimized_mesh_preview.png",
         output / "examples" / "rgb_example.png",
         output / "examples" / "depth_example.png",
-    ]:
+    ]
+    # The legacy regression gates include a separate ground-truth TSDF baseline.
+    # The public odometry run intentionally does not use ground truth pre-mapping.
+    if gt_path.is_file():
+        evidence.append(output / "ground_truth" / "gt_mesh_preview.png")
+    for source in evidence:
         if not source.is_file():
             raise FileNotFoundError(f"Required evidence artifact missing: {source}")
         shutil.copy2(source, docs_output / source.name)

@@ -47,6 +47,9 @@ def main() -> None:
             intrinsics=intrinsics,
             max_rgb_depth_difference_s=float(association.get("max_rgb_depth_difference_s", 0.02)),
             max_pose_difference_s=float(association.get("max_pose_difference_s", 0.02)),
+            # The exported RTAB-Map poses below are the only poses used for
+            # fusion. TUM ground truth is evaluation-only for this path.
+            require_groundtruth=False,
         )
     args.output.mkdir(parents=True, exist_ok=True)
     trajectory_path = args.output / "optimized_trajectory.txt"

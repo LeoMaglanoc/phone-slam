@@ -34,6 +34,7 @@ def main() -> None:
         intrinsics=intrinsics,
         max_rgb_depth_difference_s=float(association.get("max_rgb_depth_difference_s", 0.02)),
         max_pose_difference_s=float(association.get("max_pose_difference_s", 0.02)),
+        require_groundtruth=False,
     )
     frame = dataset.frames[len(dataset.frames) // 2]
     color = cv2.imread(str(frame.rgb_path), cv2.IMREAD_COLOR)

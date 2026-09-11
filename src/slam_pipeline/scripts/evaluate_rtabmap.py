@@ -38,6 +38,8 @@ def main() -> None:
 
     shutil.copy2(args.output / "optimized_comparison.png", args.output / "trajectory_comparison.png")
     shutil.copy2(args.output / "optimized_ate_error.png", args.output / "ate_error.png")
+    shutil.copy2(args.output / "raw_odometry_comparison.png", args.output / "trajectory_raw_vs_gt.png")
+    shutil.copy2(args.output / "optimized_comparison.png", args.output / "trajectory_optimized_vs_gt.png")
     metrics = {
         "raw_odometry": {**raw_metrics, "trajectory_path": str(raw_path)},
         "optimized": {**optimized_metrics, "trajectory_path": str(optimized_path)},
